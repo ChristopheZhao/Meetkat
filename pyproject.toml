@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "decision-room"
+version = "0.1.0"
+description = "Hybrid MAS decision room runtime and demo frontend scaffold"
+readme = "docs/prd/Decision-Room-PRD-v0.4.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn>=0.35",
+  "websockets>=15",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

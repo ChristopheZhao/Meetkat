@@ -1,0 +1,368 @@
+# Decision Room PRD v0.4
+
+- Date: 2026-03-10
+- Stage: MVP Planning
+- Scope: Product Design + Initial Technical Choices
+
+## 1. Product Vision
+
+Decision Room 是一个人类与多 Agent 的在线讨论会议室。
+
+目标不是“生成纪要”，而是“推动达成可执行共识”：
+
+1. 输入议题、目标、约束。
+2. 多角色 Agent 进行结构化讨论。
+3. 人类可实时打断、追问、投票、裁决。
+4. 系统判断收敛后自动结束并输出结果。
+
+MVP 交付策略：
+
+1. 前期以 agent 自动化讨论为主。
+2. 同时保留人类加入与介入能力。
+3. 必须提供会议室实时讨论实况可视化。
+
+## 2. Problem & Opportunity
+
+现有产品大多覆盖会议记录与总结，但较少覆盖“多 Agent 会中辩论 + 收敛 + 任务化输出”的闭环。
+
+机会点：
+
+1. 讨论过程可追踪（观点-反驳-结论链路）。
+2. 讨论结果可执行（Owner、截止时间、验收标准）。
+3. 讨论成本可控（模型路由+门控预算）。
+
+## 3. Target Users
+
+1. PM / Tech Lead / Architect。
+2. 方案评审和立项团队。
+3. 需要频繁协同决策的中小技术团队。
+
+## 4. Core Scenarios (MVP)
+
+1. 产品方案讨论会。
+2. 技术选型评审会。
+3. 项目复盘与行动项制定会。
+
+## 5. UX & Information Architecture
+
+核心页面：
+
+1. 会议大厅：创建会议、议题模板、会议模板、历史会议。
+2. 会议进行页：
+- 左栏：议程、约束、参考材料
+- 中栏：多 Agent 发言流
+- 右栏：分歧面板、候选方案、收敛状态
+3. 结果页：结论、备选、风险、行动项、回放时间线。
+
+核心交互：
+
+1. 人类介入：打断、追问、投票、裁决。
+2. 会议过程可视化：角色发言流、当前阶段/轮次、收敛进度面板。
+3. 展开某条发言的结构化产物（claim / summary / decision_candidate / action_item）。
+
+一期不做：
+
+1. 复杂拓扑图。
+2. 拖拽式 agent 编排器。
+3. 无限自定义角色配置 UI。
+
+## 6. MAS Technical Design (Hybrid)
+
+### 6.1 Layering
+
+1. MAS 智能核心（Model-driven）
+- 一期最小角色：Host、Pro、Con、Recorder
+- 能力：handoff、challenge、summary、human interrupt、动态角色租约
+- 角色语义固定，实例动态组合
+
+2. 事件运行时（Event-driven Runtime）
+- Room Runtime、Agent Executor、Event Bus、Shared Blackboard、Transcript Store、Consensus Service
+
+3. 护栏控制层（Guardrail FSM）
+- 只做预算/权限/超时/终止/人工介入
+
+> 原则：规则不是技术核心，规则仅做门控。
+
+### 6.2 Meeting Phases (Governance FSM)
+
+1. Explore：收集观点、拆分议题。
+2. Debate：对高分歧点进行攻防。
+3. Synthesize：收敛候选方案。
+4. Decide：投票/裁决并输出行动项。
+
+说明：
+- 阶段内不限制 Agent 的微观推理路径。
+- 阶段切换由门控条件触发，不由固定流程写死。
+
+### 6.3 Role Planning & Dynamic Instantiation
+
+1. 角色模板固定，实例按会议需求动态组合。
+2. 建议流程：`Meeting Planner -> Role Planner -> Role Validator -> Agent Factory -> Room Join`。
+3. 一期默认阵容：`host / pro / con / recorder`。
+4. 允许少量临时专家角色租约，但必须带 TTL、预算和显式 handoff。
+5. 一期不支持完全自由生成的角色体系。
+
+### 6.4 Identity, Role, and Capability
+
+1. identity 固定：`human / agent / system`。
+2. role 可变：`host / pro / con / recorder / judge(后续可扩展)`。
+3. capability 独立建模：`speak / handoff / challenge / summarize / vote / override / tool_call`。
+4. 不允许把 identity、role、capability 绑定成一个字段。
+
+### 6.5 Freedom vs Convergence
+
+自由度控制：
+
+1. Explore/Debate 允许开放协作和动态 handoff。
+2. 每轮设 token/时长预算，防止无限发散。
+3. 一期不做完全自由群聊，仍要求每轮输出结构化中间产物。
+
+收敛控制：
+
+1. 分歧指数 DI：claim 聚类 + 立场冲突强度。
+2. 共识分数 C：Support + Confidence - RiskPenalty。
+3. 结束条件（同时满足）：
+- C >= 0.75
+- top1-top2 >= 0.12
+- DI <= 0.35（连续2轮）
+4. 连续2轮无进展或超时，触发 human.override。
+
+结构化中间产物：
+
+1. `host`：`next_focus / round_goal / target_roles`
+2. `pro / con`：`claim / evidence / confidence / target_claim_ref`
+3. `recorder`：`agreement / disagreement / open_questions / decision_candidate / action_item_draft`
+
+参数策略：
+
+1. 收敛权重（Support/Confidence/RiskPenalty）在 MVP 阶段先采用经验值，不作为一期核心争议。
+2. 门控阈值全部配置化（可灰度、可回滚），通过线上评测逐步校准。
+3. 优先保证“可收敛、可解释、可回放”，再做权重精调。
+
+## 7. Communication Architecture
+
+### 7.1 Runtime Components
+
+1. `Room Runtime`：管理房间生命周期、轮次、预算、人工介入、终止。
+2. `Agent Executor`：按角色执行真实 LLM 调用，不把角色逻辑写死在运行时。
+3. `Event Bus`：房间级事件流。
+4. `Shared Blackboard`：共享议题、阶段、争议点、候选结论、行动项草稿。
+5. `Transcript Store`：事件日志和可读 transcript 双层保存。
+6. `Consensus Service`：独立做收敛判断。
+
+### 7.2 Transport
+
+1. WebSocket 主链路（双向实时）。
+2. SSE 降级（只读/弱网兜底）。
+
+### 7.3 Event Contract (MVP)
+
+统一信封字段：
+
+- event_id
+- room_id
+- room_seq
+- producer_id
+- role
+- event_type
+- ts_ms
+- idempotency_key
+- payload
+
+关键事件：
+
+1. room.started
+2. agent.joined
+3. agent.message
+4. message.chunk / message.commit
+5. agent.handoff
+6. agent.challenge
+7. agent.summary
+8. human.message
+9. human.override
+10. consensus.check
+11. meeting.ended
+
+### 7.4 Protocol Boundary
+
+1. `internal room protocol`：一期主体协议。
+2. `MCP`：仅做工具/资源访问。
+3. `A2A`：后续外部互操作边界，不作为一期内部 runtime 内核。
+
+### 7.5 Consistency & Recovery
+
+1. room_seq 房间内全序。
+2. at-least-once + 幂等去重。
+3. 重连：resume_token + last_acked_seq。
+4. 回放：snapshot + increment replay。
+
+## 8. Model Strategy (Cost-first)
+
+目标：低成本优先，稳定收敛优先。
+
+路由策略：
+
+1. 默认层：Qwen3.5 / MiniMax-M2.5。
+2. 升级层：GLM-5（高分歧/复杂工具调用）。
+3. 兜底层：OpenAI GPT-5 mini（仅灾备，不参与常态主路径）。
+
+主路径触发（任一满足）：
+
+1. 连续2轮未收敛。
+2. tool call 失败率超阈值。
+3. 低置信度持续。
+4. 达到最终裁决轮（优先走升级层，不直接走兜底）。
+
+补充说明：
+
+1. MiniMax-M2.5 是否作为默认主模型尚未最终锁定，需在 P0 基准测试后拍板。
+2. “GLM-5 触发阈值”是默认层升级到 GLM-5 的条件边界（如分歧强度、置信度、工具失败次数），属于可配置参数。
+3. 兜底按“迫不得已”触发，不作为 else 逻辑，至少包含：
+- 可用性硬故障：主路径模型 API 不可达、持续超时、持续限流
+- 质量红线：关键输出字段缺失且经过重试/同层替代后仍失败
+- 运行安全阀：会话即将失败且人工要求保底完成
+4. 兜底前置步骤必须执行：重试 -> 降载 -> 同层替代；仅前置步骤失败后才允许 fallback。
+5. 同一模型可被多个角色复用，但每个角色必须拥有独立 prompt contract。
+
+## 9. Evaluation Plan (P1/P2, not P0)
+
+P0 做真实小流量试运行（non-mock core path），不进行系统性锁型评测。
+
+系统性评测从 P1 开始：
+
+1. P1-Week 1：模型基准（Qwen3.5/GLM-5/MiniMax-M2.5/GPT-5 mini）。
+2. P1-Week 2：算法验证以 Hybrid 为主实现，仅做轻量对照基线（自由讨论、Debate+Judge）用于评测，不做并行产品化实现。
+3. P2：上线后持续评测与灰度校准（阈值、路由、成本优化）。
+
+实现原则：
+
+1. 一期只确定并实现一种主方法：Hybrid MAS。
+2. 对照方法仅用于实验评估，复用同一运行时，不单独建设通信与协作子系统。
+
+锁型门槛（P1 评测后判定）：
+
+1. ECR >= 45%
+2. Action Item 完整率 >= 80%
+3. Tool Call 成功率 >= 98%
+4. P95 首 token <= 2.5s
+5. 单次有效收敛成本满足预算目标
+
+## 10. MVP Deliverables
+
+1. 会议创建与进行页。
+2. 多 Agent 协作运行时（4 角色最小集合）。
+3. 护栏控制层（预算、超时、仲裁）。
+4. 收敛引擎（DI + 共识分数）。
+5. 结果页与导出（Markdown/PDF）。
+6. 实时会议实况能力（agent 自动化讨论可见 + 人类加入/介入可见）。
+7. 事件回放与断线恢复。
+
+## 11. Out of Scope (MVP)
+
+1. 自研音视频引擎。
+2. 无限 Agent 市场。
+3. 重型企业治理体系（可后续增强）。
+4. 完全自由生成的角色体系。
+5. 分布式 agent mesh。
+
+## 12. Decoupling Requirements (Backend vs MAS)
+
+目标：后端工程与 MAS 算法独立演进，避免后续替换算法时大规模重构。
+
+### 12.1 Interface Boundary
+
+后端只依赖抽象接口，不依赖具体算法：
+
+1. `PlanningStrategy.plan(context) -> plan`
+2. `CoordinationStrategy.next_action(context) -> action`
+3. `ConsensusStrategy.evaluate(context) -> consensus_result`
+4. `GuardrailPolicy.check(context) -> allow|block|escalate`
+
+### 12.2 Runtime Responsibilities
+
+运行时只负责：
+
+1. 连接管理（WS/SSE）
+2. 事件分发与回放（EventBus + EventStore）
+3. 会话状态管理（room/session/participant）
+4. 幂等、重试、死信、监控
+
+运行时不负责：
+
+1. 方案生成逻辑
+2. Agent 推理链路控制
+3. 算法内部评分细节
+
+### 12.3 Contract Stability
+
+下列契约定义为稳定层，算法替换不得破坏：
+
+1. 事件信封字段（event_id/room_id/room_seq/payload/schema_version）
+2. 关键事件类型（handoff/role.switch/consensus.check/human.override/meeting.end）
+3. 会话恢复协议（resume_token + last_acked_seq）
+
+### 12.4 Upgrade Rule
+
+当引入新 MAS 算法时：
+
+1. 仅新增策略实现，不改运行时核心逻辑。
+2. 协议层如需扩展，只做 schema 版本升级，不做破坏性变更。
+3. 通过 A/B 路由灰度，满足指标后再全量替换。
+
+## 13. Phased Delivery Priority
+
+原则：不在一期实现全部能力，先完成主线实现与 Demo，再做系统性评测与生产化工程。
+
+### 13.1 P0 - Algorithm First (最高优先级)
+
+目标：先做 MAS 核心能力，不追求完整工程化。
+
+范围：
+1. 收敛算法（DI + Consensus Score）
+2. 角色协作策略（handoff、角色租约、并行讨论）
+3. 模型路由策略（默认/升级/兜底）
+4. 真实小流量试运行与评测方案准备（不执行系统性锁型）
+
+完成标准：
+1. Hybrid 主线可稳定跑通核心会议闭环（讨论->收敛->输出）
+2. 输出稳定策略接口（Planning/Coordination/Consensus/Guardrail）
+3. 输出 P1 评测执行方案（指标、样本、流程）
+4. 核心协作链路（计划、协作、收敛、导出）使用真实模型调用完成，不以 mock 结果作为通过依据
+
+执行重心：
+1. 重点投入 MAS 实现（协作策略、收敛、模型路由）。
+2. 规则体系仅保留最小门控，不建设复杂规则框架。
+3. 维护体系只做 Demo 必需项，不提前建设重型后端能力。
+4. mock 仅用于基础设施单测，不用于核心 agent 行为有效性判定。
+
+### 13.2 P1 - Demo Product (次优先级)
+
+目标：实现可演示、可体验的端到端闭环。
+
+范围：
+1. 前端会议交互（会议页、分歧面板、结果页）
+2. 最小后端运行时（WS/SSE、事件分发、回放）
+3. MVP 门控（预算/超时/人工仲裁）
+4. 系统性评测执行与锁型判定（模型路由阈值、成本/质量平衡）
+
+完成标准：
+1. 支持真实会议任务演示
+2. 端到端稳定运行并可回放
+3. 完成锁型门槛评估并冻结一期默认配置
+
+### 13.3 P2 - Production Backend (后置)
+
+目标：在不破坏算法层的前提下生产化。
+
+范围：
+1. 分布式事件总线与扩展能力
+2. 更完整鉴权、审计、观测、SLA
+3. 多租户与高可用工程能力
+
+完成标准：
+1. 不改策略接口即可接入新后端
+2. 生产指标达标后替换 Demo 栈
+
+阶段约束：
+1. P2 前不以“后期维护便利”反向主导 P0/P1 的算法设计。
+2. 架构只需满足可演进，不要求一期即达到生产级完备度。

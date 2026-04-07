@@ -1,0 +1,229 @@
+{
+  "version": 1,
+  "plans": [
+    {
+      "id": "PLAN-20260301-001",
+      "title": "Decision Room P0-P2 phased delivery",
+      "kind": "feature",
+      "status": "in_progress",
+      "priority": "P0",
+      "owner": "codex",
+      "file_path": "docs/plans/active/PLAN-20260301-001.md",
+      "confirmed_by_user": true,
+      "created_at": "2026-03-01T07:19:17Z",
+      "updated_at": "2026-04-05T09:05:00Z",
+      "archived_at": null,
+      "notes": [
+        {
+          "at": "2026-03-01T07:22:49Z",
+          "text": "User confirmed execution start; prioritize agent-first autonomous meeting with live room visibility and optional human participation"
+        },
+        {
+          "at": "2026-03-01T07:24:05Z",
+          "text": "P0-1 draft freeze created: docs/tech/P0-1-mas-runtime-interface-freeze.md; includes SPI/event envelope/room topic/recovery contract"
+        },
+        {
+          "at": "2026-03-01T08:03:54Z",
+          "text": "Single primary implementation confirmed: Hybrid MAS only; free-discussion and Debate+Judge remain lightweight evaluation baselines"
+        },
+        {
+          "at": "2026-03-01T08:05:47Z",
+          "text": "Per user priority, systematic evaluation moved to P1; P0 focuses on Hybrid implementation and smoke validation"
+        },
+        {
+          "at": "2026-03-01T08:07:04Z",
+          "text": "P0 validation clarified: real LLM/agent run required for core path; mock allowed only for infra unit tests"
+        },
+        {
+          "at": "2026-03-01T08:18:46Z",
+          "text": "Completed P0-1/P0-2/P0-3 initial code: Hybrid strategies, model router, disaster-only fallback, event contract, tests passing; next is P0-4 real run pending API credentials"
+        },
+        {
+          "at": "2026-03-09T07:19:47Z",
+          "text": "Refactored real-run configuration to multi-supplier routing targets with provider registry and namespaced env vars; unit tests updated and passing"
+        },
+        {
+          "at": "2026-03-09T09:52:15Z",
+          "text": "Tightened P0 real-run host prompt contract with structured JSON validation and added REAL_RUN_ROUTE override for deterministic default/escalation/fallback checks"
+        },
+        {
+          "at": "2026-03-10T03:01:01Z",
+          "text": "Completed cross-role technical workshop on MAS communication/collaboration and drafted ADR-002/ADR-003 to freeze topology, protocol boundary, and phase-1 collaboration mechanism"
+        },
+        {
+          "at": "2026-03-10T08:23:02Z",
+          "text": "Synced PRD and execution tech docs with latest architecture decisions, including 4-role phase-1 collaboration, internal room protocol boundary, updated event model, and real-run scope clarification"
+        },
+        {
+          "at": "2026-03-25T10:03:57Z",
+          "text": "User requested plan refinement before implementation continues; clarified that the P1 frontend demo must be driven by real room runtime and room event protocol rather than pure mock interaction, and reordered execution to runtime-first before UI acceptance"
+        },
+        {
+          "at": "2026-03-25T10:15:29Z",
+          "text": "Front-end stack baseline finalized from official docs: React 19 + TypeScript + Vite + React Router v7 Data Mode + TanStack Query + native WebSocket/SSE; deferred Next.js/SSR-first approach to keep the room runtime boundary independent in P1"
+        },
+        {
+          "at": "2026-03-25T12:06:34Z",
+          "text": "Completed the runtime-first implementation scaffold for P1-1/P1-2: added FastAPI room runtime with replay, WebSocket and SSE transport, React/Vite frontend host with room event store and pages for lobby/live room/results; backend unit tests passed, frontend production build passed, and local HTTP room creation/replay verification succeeded"
+        },
+        {
+          "at": "2026-03-25T13:35:35Z",
+          "text": "Tightened requirement planner semantics per user direction: room creation now fails fast on planner/upstream errors by default, fallback is explicit-only and reduced to a transparent stub rather than hidden rule-based decomposition, typed planner/provider errors are surfaced through API/UI, and tests/build pass"
+        },
+        {
+          "at": "2026-03-27T12:42:04Z",
+          "text": "Refined the next execution phase: P1-3 now starts with replacing DemoAgentExecutor by a real multi-role executor before browser-level MVP validation; local runtime launcher auto-loads .env for development while keeping production env injection as the deployment contract"
+        },
+        {
+          "at": "2026-03-28T14:56:59Z",
+          "text": "Completed P1-3a implementation and localhost smoke validation: room runtime now uses a real multi-role executor, recorder schema accepts empty disagreement lists while preserving fail-fast validation, ended rooms reject further human writes with explicit 409 errors, and local verification moved to ports 8010/5174 because an unrelated FastAPI service occupies 8000; remaining runtime risk is explicit upstream timeout on the escalated supplier/model during longer meetings"
+        },
+        {
+          "at": "2026-03-29T10:34:02Z",
+          "text": "User requested architecture-first refactor planning before further implementation. Froze MAS harness architecture baseline and execution contracts: top-level layers are Memory / Orchestration / Control / Governance; state is memory projection only; Runtime/Harness is an execution harness rather than a layer; added four refactor sprints to the active plan before continuing broader implementation"
+        },
+        {
+          "at": "2026-03-29T10:37:50Z",
+          "text": "Split architecture-first refactor into dedicated child plan PLAN-20260329-002 so the parent plan keeps product-level granularity while the child plan owns A1-A4 architecture refactor sprints"
+        },
+        {
+          "at": "2026-03-29T11:58:02Z",
+          "text": "Child plan PLAN-20260329-002 completed A1 Memory Foundation by extracting RoomEventJournal as the single append/replay boundary and adding rebuild evidence from journal replay; next child sprint is A2 Control Consolidation"
+        },
+        {
+          "at": "2026-03-29T14:53:20Z",
+          "text": "Child plan PLAN-20260329-002 completed A2 Control Consolidation by moving room-level gating and routing-tier fallback/escalation eligibility into control policies; next child sprint is A3 Orchestration Extraction"
+        },
+        {
+          "at": "2026-03-30T02:47:54Z",
+          "text": "Child plan PLAN-20260329-002 completed A3 Orchestration Extraction by moving participant roster and round event sequencing into decision_room/orchestration/room_orchestrator.py; next child sprint is A4 Harness Thinning And Ports/Adapters Cleanup"
+        },
+        {
+          "at": "2026-03-30T07:21:53Z",
+          "text": "Child plan PLAN-20260329-002 completed A4 Harness Thinning And Ports/Adapters Cleanup by moving orchestration-owned modules out of runtime/ and leaving runtime as harness plus temporary compatibility shims; umbrella milestone P1-A is complete and focus returns to P1-3b/P1-3c"
+        },
+        {
+          "at": "2026-04-05T07:10:00Z",
+          "text": "Completed escalation-path stability diagnosis for P1-3b/P1-3c: direct engineering root cause is now pinned to round-4 fixed escalation plus serial 4-role execution plus glm-4.6 long-tail latency; accepted local stopgap B keeps escalation semantics but points local dev/demo escalation to qwen/qwen-plus only, with evidence, scope, and exit criteria recorded in docs/tech/P1-provider-escalation-diagnostic-20260405.md"
+        },
+        {
+          "at": "2026-04-05T08:05:00Z",
+          "text": "Added repeated host/pro/con latency samples and confirmed the escalation diagnosis is stable rather than a one-off measurement; same-layer observation is now sufficient, and the next engineering step should move to remedy-option comparison instead of more blind benchmarking"
+        },
+        {
+          "at": "2026-04-05T09:05:00Z",
+          "text": "Superseded the prior P1-3b/P1-3c continuation path after confirming it still depended on fixed rounds, fixed roster, and fixed emission-order assumptions; froze the new host-led meeting-topology baseline and split replan work into child plan PLAN-20260405-003"
+        }
+      ]
+    },
+    {
+      "id": "PLAN-20260329-002",
+      "title": "MAS harness architecture-first refactor",
+      "kind": "execution",
+      "status": "completed",
+      "priority": "P1",
+      "owner": "codex",
+      "file_path": "docs/plans/active/PLAN-20260329-002.md",
+      "confirmed_by_user": true,
+      "created_at": "2026-03-29T10:37:50Z",
+      "updated_at": "2026-03-30T07:21:53Z",
+      "archived_at": null,
+      "notes": [
+        {
+          "at": "2026-03-29T10:37:50Z",
+          "text": "Created as child execution plan of PLAN-20260301-001 to carry architecture-first refactor sprints A1-A4 under the frozen MAS harness baseline"
+        },
+        {
+          "at": "2026-03-29T11:58:02Z",
+          "text": "Completed A1 Memory Foundation: extracted RoomEventJournal, kept projection rebuildable from journal replay, and moved plan focus to A2 Control Consolidation"
+        },
+        {
+          "at": "2026-03-29T12:29:18Z",
+          "text": "Started A2 Control Consolidation: introduced RoomControlPolicy for room-level write admission and meeting-end payloads, removed duplicate meeting.ended emission after human override, and kept A2 open pending broader timeout/retry/fallback consolidation"
+        },
+        {
+          "at": "2026-03-29T12:45:47Z",
+          "text": "Advanced A2 by moving round budget ownership into RoomControlPolicy/RoomControlConfig and routing runtime loop start, consensus end, budget end, and runtime failure gating through the control outlet; A2 remains open because timeout/retry/fallback eligibility are not yet fully unified"
+        },
+        {
+          "at": "2026-03-29T14:53:20Z",
+          "text": "Completed A2 Control Consolidation: routing-tier gating now lives in RoutingControlPolicy, HybridModelRouter only maps tier to target, and the next sprint focus is A3 Orchestration Extraction"
+        },
+        {
+          "at": "2026-03-30T02:47:54Z",
+          "text": "Completed A3 Orchestration Extraction: created decision_room/orchestration/room_orchestrator.py, moved participant roster and round event sequencing out of room_runtime.py, and moved plan focus to A4 Harness Thinning And Ports/Adapters Cleanup"
+        },
+        {
+          "at": "2026-03-30T07:21:53Z",
+          "text": "Completed A4 Harness Thinning And Ports/Adapters Cleanup: moved brief_planner, room_executor, real_run_contract, and legacy demo_executor out of runtime/ into orchestration/, left compatibility shims only, and closed the child plan"
+        }
+      ]
+    },
+    {
+      "id": "PLAN-20260405-003",
+      "title": "P1 host-led meeting core replan",
+      "kind": "execution",
+      "status": "completed",
+      "priority": "P1",
+      "owner": "codex",
+      "file_path": "docs/plans/active/PLAN-20260405-003.md",
+      "confirmed_by_user": true,
+      "created_at": "2026-04-05T09:05:00Z",
+      "updated_at": "2026-04-07T13:59:36Z",
+      "archived_at": null,
+      "notes": [
+        {
+          "at": "2026-04-05T09:05:00Z",
+          "text": "Created as child execution plan of PLAN-20260301-001 after aborting the prior P1 continuation path; new baseline is pre-room planning workflow + Host-led orchestration + dynamic specialists + memory-backed synthesis"
+        },
+        {
+          "at": "2026-04-07T09:32:45Z",
+          "text": "Deep diagnosis confirmed a new post-B5 owner drift around room-start contract semantics; follow-on correction moved into child plan PLAN-20260407-004 so the completed mainline replan and the new boundary correction do not share one execution stream"
+        },
+        {
+          "at": "2026-04-07T13:59:36Z",
+          "text": "B1-B5 mainline and child corrective plan PLAN-20260407-004 are both implemented and revalidated; parent plan is entering completion confirmation."
+        },
+        {
+          "at": "2026-04-07T13:59:36Z",
+          "text": "Closed the parent P1 host-led execution plan after child plan PLAN-20260407-004 completed the room-start owner correction; B1-B5 mainline and post-B5 correction are now both closed on the same architecture baseline."
+        }
+      ]
+    },
+    {
+      "id": "PLAN-20260407-004",
+      "title": "Room-start contract owner correction",
+      "kind": "fix",
+      "status": "completed",
+      "priority": "P1",
+      "owner": "codex",
+      "file_path": "docs/plans/active/PLAN-20260407-004.md",
+      "confirmed_by_user": true,
+      "created_at": "2026-04-07T09:32:45Z",
+      "updated_at": "2026-04-07T13:32:39Z",
+      "archived_at": null,
+      "notes": [
+        {
+          "at": "2026-04-07T09:32:45Z",
+          "text": "Created as child corrective plan of PLAN-20260405-003 after architecture/code/product diagnostics converged on a single new issue: room-start contract semantics owner drift across planner output, preflight rule taxonomy, and harness-injected validation contracts"
+        },
+        {
+          "at": "2026-04-07T09:46:41Z",
+          "text": "Plan review corrected the execution contract: C1 must freeze a durable owner split table before code changes, C2 must converge on a single orchestration-owned canonical contract artifact, and C3/C4 now explicitly block relabeled harness semantics from flowing back into core or product surfaces."
+        },
+        {
+          "at": "2026-04-07T09:50:47Z",
+          "text": "Completed C1 by freezing the owner split table in the active plan. C2 now starts from a single target artifact: room_start_contract must replace parallel semantics across raw open_questions, preflight taxonomy, and harness acceptance context."
+        },
+        {
+          "at": "2026-04-07T10:15:10Z",
+          "text": "Completed the corrective execution plan end-to-end: core room-start semantics now converge on the single persisted room_start_contract artifact, frontend product surfaces use a shared allowlisted contract view instead of validation-specific panels, harness usage stays explicit via operator_context, and regression/build validation passed."
+        },
+        {
+          "at": "2026-04-07T13:32:39Z",
+          "text": "Applied a review-driven amendment inside the same plan: canonical room-start assembly no longer depends on the legacy taxonomy path, planning.completed no longer persists parallel room_start_contract_draft or raw planner open_questions artifacts, and home now shares the same product allowlist helper as the other product surfaces."
+        }
+      ]
+    }
+  ]
+}

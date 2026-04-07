@@ -1,0 +1,50 @@
+{
+  "id": "EXP-20260405-0001",
+  "created_at": "2026-04-05T14:30:01Z",
+  "updated_at": "2026-04-05T14:30:01Z",
+  "title": "避免把多 agent 会议 MVP 退化成固定回合固定 roster 的规则工作流",
+  "problem_signature": "multi-agent 会议系统在 MVP 阶段用固定轮次、固定 roster、固定发言顺序替代真正的编排逻辑",
+  "problem_signature_norm": "multi-agent 会议系统在 mvp 阶段用固定轮次、固定 roster、固定发言顺序替代真正的编排逻辑",
+  "decision_rules": [
+    "MVP 可以缩小能力范围，但不能用规则模板替代编排层。",
+    "中心化 orchestrator 可以作为 P1 拓扑，但其下一步决策必须模型驱动，不能靠固定 round/固定顺序驱动。",
+    "会中常驻 active agent 最小化为 Host；specialists 必须按议题动态实例化，而不是把默认 roster 写成唯一 roster。",
+    "Recorder 可以先降为 memory-backed synthesis capability，但 candidate decision、action items、open questions、agreement/disagreement summary 必须仍是一等结构化产物。"
+  ],
+  "review_checklist": [
+    "当前会议是否仍依赖固定 max_rounds 作为会议语义而不是纯预算 guardrail？",
+    "当前 roster 是否由会前规划工作流和会中 Host 共同决定，而不是写死为固定常驻阵容？",
+    "当前谁发言、回答什么、是否继续、是否收敛，是否由 Orchestration 决定而不是由 Control/round index 决定？",
+    "当前会议结束是否输出显式结论类型，而不是用 budget exhausted 直接充当会议完成语义？"
+  ],
+  "source_event_refs": [
+    "docs/experience/sources/SRC-20260405-meeting-topology-correction.md#key-turning-points"
+  ],
+  "doc_refs": [
+    "docs/tech/P1-host-led-meeting-topology-baseline.md",
+    "docs/tech/MAS-harness-architecture-baseline.md",
+    "docs/plans/active/PLAN-20260405-003.md"
+  ],
+  "tags": [
+    "agent-harness",
+    "orchestration",
+    "mvp-boundary",
+    "anti-rule-driven"
+  ],
+  "context_constraints": [
+    "适用于需要实时回放、人类介入、可恢复和显式结论的 multi-agent meeting 系统。"
+  ],
+  "anti_patterns": [
+    "把固定 4 轮、固定 host/pro/con/recorder、固定顺序包装成所谓的 multi-agent MVP。",
+    "让 Control 用 round index、budget exhaustion 或固定 decision round 替代编排层做语义决策。"
+  ],
+  "outcome": "冻结了 Host-led meeting topology baseline，正式废弃旧的固定轮次/固定 roster 路径，并建立新的 P1 重规划子计划。",
+  "confidence": "high",
+  "owner": "codex",
+  "capture_meta": {
+    "trigger_mode": "manual-explicit",
+    "confirmed_by_user": true,
+    "confirmation_note": "User explicitly requested an experience capture for this window’s architecture correction.",
+    "confirmed_at": "2026-04-05T14:30:01Z"
+  }
+}

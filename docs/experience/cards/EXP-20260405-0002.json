@@ -1,0 +1,53 @@
+{
+  "id": "EXP-20260405-0002",
+  "created_at": "2026-04-05T14:32:22Z",
+  "updated_at": "2026-04-05T14:32:22Z",
+  "title": "固定 agent harness 分层边界，避免 Runtime/State/Control 漂移成混层主线",
+  "problem_signature": "agent harness 重构过程中把 Runtime、State、Adapter 当成顶层层名，或让 Control 越界替代 Orchestration 做语义决策",
+  "problem_signature_norm": "agent harness 重构过程中把 runtime、state、adapter 当成顶层层名，或让 control 越界替代 orchestration 做语义决策",
+  "decision_rules": [
+    "顶层主架构只允许 Memory / Orchestration / Control / Governance；Runtime/Harness 只是执行线束，不是层。",
+    "State 不单独成层，state = projection(memory_at_time_t)；bounded context 内只能有一个明确的 SoT。",
+    "Control 只负责 lifecycle、retry、timeout、override、resume、fallback gate，不负责谁发言、回答什么、是否收敛。",
+    "Adapter/helper 只能做边界映射，不得缓存第二事实链，也不得长出第二套 control/orchestration 主线。"
+  ],
+  "review_checklist": [
+    "当前设计里是否又把 Runtime 或 State 当成顶层层名在讨论或实现？",
+    "当前 SoT 是否仍唯一且清晰，例如 RoomEventJournal，而不是 snapshot/projection/helper cache？",
+    "当前谁发言、回答什么、是否继续、是否收敛，是否仍由 Orchestration 决定？",
+    "当前 Control 是否只在 gate/lifecycle/recovery 范围内，没有通过 round index、budget exhausted 或固定信号偷做语义决策？",
+    "当前 adapter/helper 是否只贴边，不维护第二事实链或第二主线？"
+  ],
+  "source_event_refs": [
+    "docs/experience/sources/SRC-20260405-agent-harness-layer-boundaries.md#key-turning-points"
+  ],
+  "doc_refs": [
+    "docs/tech/MAS-harness-architecture-baseline.md",
+    "docs/tech/P1-host-led-meeting-topology-baseline.md",
+    "docs/plans/active/PLAN-20260405-003.md"
+  ],
+  "tags": [
+    "agent-harness",
+    "architecture-boundary",
+    "control-vs-orchestration",
+    "sot"
+  ],
+  "context_constraints": [
+    "适用于需要长期演进、可恢复、可回放、多人/多 agent 协作的 agent harness 系统。"
+  ],
+  "anti_patterns": [
+    "把 Runtime 作为大桶层承载业务语义。",
+    "把 State 从 Memory 中独立出来后让 projection 与事实链争夺 SoT。",
+    "让 Control 用固定轮次、固定顺序、固定 decision round 替代编排层。",
+    "让 adapter/helper 通过缓存、旁路写入或定制 fallback 长成竞争主线。"
+  ],
+  "outcome": "将本轮关于 Memory/Orchestration/Control/Governance 的边界收口成可复用规则，降低后续实现再次混层的风险。",
+  "confidence": "high",
+  "owner": "codex",
+  "capture_meta": {
+    "trigger_mode": "manual-explicit",
+    "confirmed_by_user": true,
+    "confirmation_note": "User explicitly requested experience capture and asked to补充架构各层边界 this session.",
+    "confirmed_at": "2026-04-05T14:32:22Z"
+  }
+}

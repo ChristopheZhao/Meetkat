@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "./.contract-dist",
+    "rootDir": "./src",
+    "declaration": false
+  },
+  "include": ["src/lib/*.ts", "src/vite-env.d.ts"]
+}
