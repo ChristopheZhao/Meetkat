@@ -224,6 +224,25 @@
           "text": "Applied a review-driven amendment inside the same plan: canonical room-start assembly no longer depends on the legacy taxonomy path, planning.completed no longer persists parallel room_start_contract_draft or raw planner open_questions artifacts, and home now shares the same product allowlist helper as the other product surfaces."
         }
       ]
+    },
+    {
+      "id": "PLAN-20260412-005",
+      "title": "Evaluation harness governance hardening",
+      "kind": "fix",
+      "status": "draft",
+      "priority": "P1",
+      "owner": "codex",
+      "file_path": "docs/plans/active/PLAN-20260412-005.md",
+      "confirmed_by_user": true,
+      "created_at": "2026-04-12T07:38:09Z",
+      "updated_at": "2026-04-13T01:57:04Z",
+      "archived_at": null,
+      "notes": [
+        {
+          "at": "2026-04-13T01:57:04Z",
+          "text": "Created after the user confirmed the next phase should harden evaluation harness governance boundaries before any new product capability work; this plan owns inventory, contract hardening, product-surface separation, and regression closure without reopening the closed room-start owner correction."
+        }
+      ]
     }
   ]
 }
