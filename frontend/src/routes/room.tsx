@@ -15,7 +15,11 @@ import {
 } from "@tanstack/react-query";
 
 import { postHumanMessage, postHumanOverride } from "../lib/api";
-import hostAvatar from "../assets/avatars/host.png";
+import decisionScribeAvatar from "../assets/agents/decision-scribe.webp";
+import productStrategistAvatar from "../assets/agents/product-strategist.webp";
+import riskControllerAvatar from "../assets/agents/risk-controller.webp";
+import supervisorAvatar from "../assets/agents/supervisor.webp";
+import systemsArchitectAvatar from "../assets/agents/systems-architect.webp";
 import {
   buildRoleDirectory,
   formatToken,
@@ -86,6 +90,24 @@ const roleLabelMap: Record<string, string> = {
   human: "Human",
   system: "System",
   synthesis: "Synthesis",
+  implementation_specialist: "Systems Architect",
+  product_specialist: "Product Strategist",
+  risk_specialist: "Risk Controller",
+  operations_specialist: "Decision Scribe",
+};
+
+const roleAvatarMap: Record<string, string> = {
+  host: supervisorAvatar,
+  supervisor: supervisorAvatar,
+  implementation_specialist: systemsArchitectAvatar,
+  systems_architect: systemsArchitectAvatar,
+  product_specialist: productStrategistAvatar,
+  product_strategist: productStrategistAvatar,
+  risk_specialist: riskControllerAvatar,
+  risk_controller: riskControllerAvatar,
+  operations_specialist: decisionScribeAvatar,
+  decision_scribe: decisionScribeAvatar,
+  synthesis: decisionScribeAvatar,
 };
 
 function buildInitials(value: string): string {
@@ -104,7 +126,7 @@ function getRoleVisual(role: string) {
   return {
     label: roleLabelMap[normalized] || formatToken(normalized) || "Unknown",
     initials: buildInitials(normalized),
-    avatarSrc: normalized === "host" ? hostAvatar : undefined,
+    avatarSrc: roleAvatarMap[normalized],
   };
 }
 
@@ -124,7 +146,7 @@ function RoleAvatar({
 }) {
   const normalized = role.trim().toLowerCase();
   const label = resolveRoleLabel(normalized, roleDirectory);
-  const avatarSrc = normalized === "host" ? hostAvatar : undefined;
+  const avatarSrc = getRoleVisual(normalized).avatarSrc;
   const initials = buildInitials(label);
 
   if (avatarSrc) {
@@ -144,6 +166,36 @@ function RoleAvatar({
       {initials}
     </span>
   );
+}
+
+function readLatestCentralMas(snapshot: RoomSnapshot): Record<string, unknown> | null {
+  for (const entry of [...snapshot.transcript].reverse()) {
+    const payload = entry.artifacts.central_mas;
+    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+      return payload as Record<string, unknown>;
+    }
+  }
+  return null;
+}
+
+function readAssignmentContracts(centralMas: Record<string, unknown> | null) {
+  const raw = centralMas?.assignment_contracts;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw.flatMap((item) => {
+    if (!item || typeof item !== "object") {
+      return [];
+    }
+    const payload = item as Record<string, unknown>;
+    const agent = String(payload.agent ?? "").trim();
+    const mission = String(payload.mission ?? "").trim();
+    const deliverable = String(payload.deliverable ?? "").trim();
+    if (!agent) {
+      return [];
+    }
+    return [{ agent, mission, deliverable }];
+  });
 }
 
 export function RoomPage() {
@@ -183,6 +235,9 @@ export function RoomPage() {
   const executorTargets = readRuntimeExecutorTargets(snapshot);
   const operatorContractSections = readProductOperatorContractSections(snapshot);
   const missingOperatorInputs = readPreflightList(snapshot, "missing_operator_inputs");
+  const centralMas = readLatestCentralMas(snapshot);
+  const assignmentContracts = readAssignmentContracts(centralMas);
+  const centralTopology = String(centralMas?.topology ?? "").trim();
 
   const humanMessageMutation = useMutation({
     mutationFn: (text: string) => postHumanMessage(snapshot.room_id, text),
@@ -338,6 +393,37 @@ export function RoomPage() {
                     <li key={item}>{item}</li>
                   ))}
                 </ul>
+              </div>
+            ) : null}
+          </section>
+
+          <section className={styles.panelCard}>
+            <h3>Central MAS</h3>
+            <div className={styles.topologyStrip}>
+              <RoleAvatar role="host" roleDirectory={roleDirectory} />
+              <span />
+              <RoleAvatar role="implementation_specialist" roleDirectory={roleDirectory} />
+              <RoleAvatar role="product_specialist" roleDirectory={roleDirectory} />
+              <RoleAvatar role="risk_specialist" roleDirectory={roleDirectory} />
+              <RoleAvatar role="synthesis" roleDirectory={roleDirectory} />
+            </div>
+            <p className={styles.secondaryText}>
+              {centralTopology
+                ? formatToken(centralTopology)
+                : "Waiting for the supervisor to publish assignment contracts."}
+            </p>
+            {assignmentContracts.length > 0 ? (
+              <div className={styles.assignmentList}>
+                {assignmentContracts.map((contract) => (
+                  <article className={styles.assignmentItem} key={contract.agent}>
+                    <div className={styles.messageTitleRow}>
+                      <strong>{resolveRoleLabel(contract.agent, roleDirectory)}</strong>
+                      <span className={styles.eventPill}>assigned</span>
+                    </div>
+                    <p className={styles.secondaryText}>{contract.deliverable}</p>
+                    <p className={styles.assignmentMission}>{contract.mission}</p>
+                  </article>
+                ))}
               </div>
             ) : null}
           </section>

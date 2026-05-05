@@ -96,7 +96,7 @@ export function HomePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [requirement, setRequirement] = useState(
-    "We need a runtime-first multi-agent meeting room MVP for engineering reviews. It should turn one requirement into a visible meeting brief, preserve replay, and keep human override available.",
+    "Should we adopt a centralized MAS architecture for an online engineering decision room that can discuss deep delivery tradeoffs, expose agent assignments, preserve real-time communication, and keep governance boundaries clear?",
   );
   const [preflightReport, setPreflightReport] = useState<RoomPreflightReport | null>(
     null,
@@ -189,15 +189,15 @@ export function HomePage() {
   return (
     <div className={styles.layout}>
       <section className={styles.hero}>
-        <p className={styles.kicker}>Runtime-first P1 baseline</p>
+        <p className={styles.kicker}>Centralized supervisor MAS</p>
         <h2 className={styles.heading}>
-          Start a room from the same event protocol the meeting page will replay.
+          Open a live decision room with a supervisor, role agents, and replayable communication.
         </h2>
         <p className={styles.copy}>
-          Enter one requirement. The room opens only after the primary planner
-          successfully produces a meeting brief and clears the room-start
-          contract. Planner and room-start failures surface directly
-          instead of silently degrading into local rules.
+          Enter one deep decision problem. The central supervisor creates the
+          meeting brief, assigns specialist agents, streams their work products
+          through the room event protocol, and closes with an explicit decision
+          record.
         </p>
       </section>
 
@@ -205,7 +205,7 @@ export function HomePage() {
         <form className={styles.card} onSubmit={handleCreateRoom}>
           <div className={styles.cardHeader}>
             <h3>Create A Room</h3>
-            <span className={styles.badge}>Agent-led</span>
+            <span className={styles.badge}>Central MAS</span>
           </div>
           <label className={styles.field}>
             <span>Requirement</span>
@@ -217,9 +217,9 @@ export function HomePage() {
             />
           </label>
           <p className={styles.helper}>
-            This input now goes through planner + room-start contract assessment
-            before room start. Missing operator inputs stay outside the room
-            instead of getting rediscovered mid-meeting as late blocked outcomes.
+            The default runtime uses a local central supervisor MAS, so the room
+            is usable without external provider credentials. Provider-backed LLM
+            execution remains available through runtime env configuration.
           </p>
           <div className={styles.buttonRow}>
             <button

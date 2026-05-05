@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from decision_room.orchestration import (
+    CentralizedMASExecutor,
     RequirementPlanningService,
     LLMRoomExecutor,
     PreRoomPlanningWorkflow,
@@ -30,10 +31,10 @@ from .room_projector import RoomProjector
 
 @dataclass
 class RuntimeConfig:
-    message_chunk_delay_sec: float = 0.10
-    between_turn_delay_sec: float = 0.18
-    between_round_delay_sec: float = 0.35
-    max_rounds: int = 4
+    message_chunk_delay_sec: float = 0.12
+    between_turn_delay_sec: float = 0.25
+    between_round_delay_sec: float = 5.0
+    max_rounds: int = 6
 
 
 @dataclass
@@ -69,7 +70,7 @@ class RoomRuntime:
             RoomControlConfig(max_rounds=self._config.max_rounds)
         )
         self._orchestrator = RoomOrchestrator(
-            executor or LLMRoomExecutor.from_env(),
+            executor or CentralizedMASExecutor(),
             RoomOrchestratorConfig(
                 message_chunk_delay_sec=self._config.message_chunk_delay_sec,
                 between_turn_delay_sec=self._config.between_turn_delay_sec,

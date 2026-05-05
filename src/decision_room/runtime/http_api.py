@@ -12,6 +12,8 @@ from pydantic import BaseModel, Field
 
 from decision_room.dev_env import PROJECT_ROOT, load_local_dotenv
 from decision_room.orchestration import (
+    CentralizedMASExecutor,
+    CentralizedRequirementPlanner,
     DemoAgentExecutor,
     HeuristicRequirementPlanner,
     LLMRequirementPlanner,
@@ -37,7 +39,13 @@ class AsyncDemoExecutor:
 def _build_requirement_planning_service(
     env: Mapping[str, str],
 ) -> RequirementPlanningService | None:
-    planner_mode = env.get("DECISION_ROOM_PLANNER_MODE", "primary").strip().lower()
+    planner_mode = env.get("DECISION_ROOM_PLANNER_MODE", "centralized").strip().lower()
+    if planner_mode == "centralized":
+        return RequirementPlanningService(
+            primary_planner=CentralizedRequirementPlanner(),
+            fallback_planner=None,
+            primary_unavailable_reason="",
+        )
     if planner_mode == "primary":
         return RequirementPlanningService.from_mapping(env)
     if planner_mode == "fallback_only":
@@ -63,7 +71,7 @@ def _build_requirement_planning_service(
         )
     raise RuntimeError(
         "unsupported DECISION_ROOM_PLANNER_MODE; expected one of "
-        "'primary', 'fallback_only', or 'primary_with_fallback'"
+        "'centralized', 'primary', 'fallback_only', or 'primary_with_fallback'"
     )
 
 
@@ -84,15 +92,33 @@ def _planner_readiness(
     return {
         "planner_mode": planner_mode,
         "planner_missing_env": _planner_missing_env(planner_mode, env),
-        "planner_target": _target_identity(env, "MODEL_DEFAULT")
-        if planner_mode != "fallback_only"
-        else {},
+        "planner_target": _planner_target_identity(planner_mode, env),
         **status,
     }
 
 
 def _build_executor(env: Mapping[str, str]) -> tuple[Any, dict[str, Any]]:
-    executor_mode = env.get("DECISION_ROOM_EXECUTOR", "llm").strip().lower()
+    executor_mode = env.get("DECISION_ROOM_EXECUTOR", "centralized").strip().lower()
+    if executor_mode == "centralized":
+        return CentralizedMASExecutor(), {
+            "executor_mode": executor_mode,
+            "executor_ready": True,
+            "executor_reason": "",
+            "executor_missing_env": [],
+            "executor_targets": {
+                "default": {
+                    "supplier": "local",
+                    "model": "central-supervisor-mas",
+                }
+            },
+            "executor_guardrails": {
+                "route_visibility": (
+                    "central supervisor state, assignment contracts, and role work products "
+                    "are emitted through room events"
+                ),
+                "topology": "single_supervisor_shared_memory",
+            },
+        }
     if executor_mode == "llm":
         executor = LLMRoomExecutor.from_mapping(env)
         if isinstance(executor, UnavailableRoomExecutor):
@@ -122,14 +148,24 @@ def _build_executor(env: Mapping[str, str]) -> tuple[Any, dict[str, Any]]:
             "executor_guardrails": {},
         }
     raise RuntimeError(
-        "unsupported DECISION_ROOM_EXECUTOR; expected 'llm' or 'demo'"
+        "unsupported DECISION_ROOM_EXECUTOR; expected 'centralized', 'llm', or 'demo'"
     )
 
 
 def _planner_missing_env(planner_mode: str, env: Mapping[str, str]) -> list[str]:
-    if planner_mode == "fallback_only":
+    if planner_mode in {"centralized", "fallback_only"}:
         return []
     return _missing_target_env(env, "MODEL_DEFAULT")
+
+
+def _planner_target_identity(
+    planner_mode: str, env: Mapping[str, str]
+) -> dict[str, str]:
+    if planner_mode == "centralized":
+        return {"supplier": "local", "model": "centralized-requirement-planner"}
+    if planner_mode == "fallback_only":
+        return {}
+    return _target_identity(env, "MODEL_DEFAULT")
 
 
 def _executor_missing_env(executor_mode: str, env: Mapping[str, str]) -> list[str]:
@@ -237,7 +273,7 @@ def build_runtime_from_env(
     if env is None:
         load_local_dotenv(PROJECT_ROOT / ".env")
     env_map = dict(os.environ if env is None else env)
-    planner_mode = env_map.get("DECISION_ROOM_PLANNER_MODE", "primary").strip().lower()
+    planner_mode = env_map.get("DECISION_ROOM_PLANNER_MODE", "centralized").strip().lower()
     requirement_planner = _build_requirement_planning_service(env_map)
     executor, executor_status = _build_executor(env_map)
     readiness = {

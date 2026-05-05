@@ -5,10 +5,14 @@
 
 .hero {
   border-radius: var(--radius-lg);
-  padding: 28px;
-  background: linear-gradient(135deg, rgba(255, 252, 245, 0.92), rgba(245, 238, 223, 0.8));
-  border: 1px solid rgba(17, 34, 41, 0.08);
+  min-height: 330px;
+  padding: 30px;
+  background:
+    linear-gradient(90deg, rgba(10, 14, 20, 0.88), rgba(10, 14, 20, 0.56), rgba(10, 14, 20, 0.18)),
+    url("../assets/meeting/central-decision-room.webp") center / cover;
+  border: 1px solid rgba(247, 249, 250, 0.18);
   box-shadow: var(--shadow);
+  color: #f7fafb;
 }
 
 .kicker {
@@ -29,7 +33,8 @@
 .copy {
   margin: 0;
   max-width: 720px;
-  color: var(--text-muted);
+  color: rgba(247, 249, 250, 0.78);
+  line-height: 1.55;
 }
 
 .grid {
@@ -44,7 +49,7 @@
   background: var(--surface);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
-  backdrop-filter: blur(18px);
+  backdrop-filter: blur(14px);
 }
 
 .cardHeader {
@@ -62,7 +67,7 @@
 
 .badge,
 .badgeMuted {
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   padding: 6px 10px;
   font-size: 0.8rem;
 }
@@ -96,15 +101,15 @@
   border: 1px solid rgba(17, 34, 41, 0.14);
   border-radius: var(--radius-sm);
   padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.72);
+  background: rgba(255, 255, 255, 0.86);
   resize: vertical;
 }
 
 .primaryButton {
   border: none;
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   padding: 13px 18px;
-  background: linear-gradient(135deg, #0c8a78, #2f6d83);
+  background: linear-gradient(135deg, #087c73, #1b5f7a);
   color: white;
   font-weight: 600;
 }
@@ -117,7 +122,7 @@
 
 .secondaryButton {
   border: 1px solid rgba(17, 34, 41, 0.14);
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   padding: 13px 18px;
   background: rgba(255, 255, 255, 0.78);
   color: var(--text);
@@ -143,7 +148,7 @@
   padding: 18px;
   border-radius: var(--radius-md);
   border: 1px solid rgba(17, 34, 41, 0.08);
-  background: linear-gradient(180deg, rgba(248, 244, 233, 0.94), rgba(255, 255, 255, 0.88));
+  background: rgba(255, 255, 255, 0.78);
 }
 
 .preflightHeader {
@@ -168,7 +173,7 @@
 
 .preflightReady,
 .preflightBlocked {
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   padding: 7px 11px;
   font-size: 0.82rem;
   white-space: nowrap;
@@ -226,7 +231,7 @@
 }
 
 .tag {
-  border-radius: 999px;
+  border-radius: var(--radius-sm);
   padding: 6px 10px;
   background: rgba(47, 109, 131, 0.08);
   color: #1f5567;
@@ -294,7 +299,12 @@
   border: 1px solid rgba(17, 34, 41, 0.08);
   border-radius: var(--radius-md);
   padding: 16px;
-  background: rgba(255, 255, 255, 0.58);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.roomCard:hover {
+  border-color: rgba(8, 124, 115, 0.3);
+  background: rgba(255, 255, 255, 0.95);
 }
 
 .roomTopic {

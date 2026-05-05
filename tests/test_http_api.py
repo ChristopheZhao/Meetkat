@@ -32,7 +32,7 @@ class HttpApiRuntimeBootstrapTests(unittest.IsolatedAsyncioTestCase):
                 message_chunk_delay_sec=0.0,
                 between_turn_delay_sec=0.0,
                 between_round_delay_sec=0.0,
-                max_rounds=2,
+                max_rounds=4,
             ),
         )
 
@@ -89,9 +89,52 @@ class HttpApiRuntimeBootstrapTests(unittest.IsolatedAsyncioTestCase):
             self.runtime = build_runtime_from_env(config=RuntimeConfig())
             load_dotenv.assert_called_once()
 
+    async def test_build_runtime_from_env_defaults_to_centralized_mas(self) -> None:
+        self.runtime = build_runtime_from_env(
+            {},
+            config=RuntimeConfig(
+                message_chunk_delay_sec=0.0,
+                between_turn_delay_sec=0.0,
+                between_round_delay_sec=0.0,
+                max_rounds=5,
+            ),
+        )
+
+        readiness = self.runtime.runtime_readiness()
+        self.assertEqual(readiness["planner_mode"], "centralized")
+        self.assertEqual(readiness["executor_mode"], "centralized")
+        self.assertTrue(readiness["primary_planner_ready"])
+        self.assertTrue(readiness["executor_ready"])
+
+        snapshot = await self.runtime.create_room(
+            requirement=(
+                "Should we adopt a centralized MAS architecture for online "
+                "engineering decision rooms with real communication and clear governance?"
+            ),
+            require_preflight_ready=True,
+            entry_scope="interactive_room_start",
+        )
+
+        await self._wait_until(
+            lambda: self.runtime.get_snapshot(snapshot["room_id"])["status"] == "ended"
+        )
+        current = self.runtime.get_snapshot(snapshot["room_id"])
+        self.assertEqual(current["brief_source"], "agent")
+        self.assertEqual(current["conclusion_type"], "decision_ready")
+        self.assertGreater(len(current["transcript"]), 0)
+        host_messages = [
+            item
+            for item in current["transcript"]
+            if item["role"] == "host" and item["event_type"] == "agent.message"
+        ]
+        self.assertTrue(host_messages)
+        self.assertIn("central_mas", host_messages[0]["artifacts"])
+
     async def test_build_runtime_from_env_exposes_provider_targets_in_readiness(self) -> None:
         self.runtime = build_runtime_from_env(
             {
+                "DECISION_ROOM_EXECUTOR": "llm",
+                "DECISION_ROOM_PLANNER_MODE": "primary",
                 "MODEL_DEFAULT_SUPPLIER": "openai",
                 "MODEL_DEFAULT_MODEL": "gpt-default",
                 "MODEL_ESCALATION_SUPPLIER": "openai",
@@ -133,7 +176,13 @@ class HttpApiRuntimeBootstrapTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_build_runtime_from_env_exposes_real_path_readiness_blockers(self) -> None:
-        self.runtime = build_runtime_from_env({}, config=RuntimeConfig())
+        self.runtime = build_runtime_from_env(
+            {
+                "DECISION_ROOM_EXECUTOR": "llm",
+                "DECISION_ROOM_PLANNER_MODE": "primary",
+            },
+            config=RuntimeConfig(),
+        )
 
         readiness = self.runtime.runtime_readiness()
 
