@@ -1,8 +1,18 @@
 # Centralized MAS Delivery Boundary
 
-- Date: 2026-05-05
+- Date: 2026-05-05 (initial), 2026-05-26 (amended after architecture review)
 - Status: active-delivery-boundary
 - Scope: online decision-room MAS delivery path
+
+## 0. Amendment 2026-05-26
+
+The first version of this doc was published alongside commit 5f47149, which shipped a deterministic stub `CentralizedMeetingSupervisor` whose role outputs were 4 hardcoded paragraphs keyed by `role.stance`, no LLM calls. That stub does NOT satisfy this boundary. The active remediation is PLAN-20260513-006: replace the stub with a real `LLMSupervisor` that owns role selection and per-agent assignment contracts via a real LLM call, while specialists reuse `LLMRoomExecutor._generate_argument` machinery and convergence stays gated by `HybridConsensusStrategy`. Until that remediation lands, this boundary is the design intent, not the as-shipped state.
+
+Binding clarifications:
+
+1. Supervisor and specialist outputs must come from LLM calls at delivery. A deterministic offline implementation is allowed only as an explicit governance/test capability, never as a silent default executor mode.
+2. The product UI must read the `central_mas` artifact bundle through the same `PRODUCT_OPERATOR_CONTRACT_SECTIONS` allowlist that gates every other product-facing artifact. Direct reads outside the allowlist are forbidden.
+3. `DECISION_ROOM_EXECUTOR=centralized` is an opt-in product mode that requires real provider env. Missing env must surface as `UnavailableRoomExecutor`, never as stub output.
 
 ## 1. Accepted Direction
 

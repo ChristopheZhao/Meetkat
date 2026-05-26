@@ -235,12 +235,39 @@
       "file_path": "docs/plans/active/PLAN-20260412-005.md",
       "confirmed_by_user": true,
       "created_at": "2026-04-12T07:38:09Z",
-      "updated_at": "2026-04-13T01:57:04Z",
+      "updated_at": "2026-05-26T00:00:00Z",
       "archived_at": null,
       "notes": [
         {
           "at": "2026-04-13T01:57:04Z",
           "text": "Created after the user confirmed the next phase should harden evaluation harness governance boundaries before any new product capability work; this plan owns inventory, contract hardening, product-surface separation, and regression closure without reopening the closed room-start owner correction."
+        },
+        {
+          "at": "2026-05-26T00:00:00Z",
+          "text": "Scope-out violation acknowledged: commit 5f47149 shipped a centralized MAS product capability in the same window the plan said 'no new product capability or product IA'. Sprint H3 done signal 'product surfaces continue to expose only allowlisted product-safe contract/read-model sections' was also violated because the new frontend Central MAS panel reads central_mas artifact directly outside PRODUCT_OPERATOR_CONTRACT_SECTIONS. Remediation moved to PLAN-20260513-006 which will replace the stub supervisor with a real LLM-backed supervisor, route central_mas through the product allowlist, and add the H4 negative-case regressions this plan still owes."
+        }
+      ]
+    },
+    {
+      "id": "PLAN-20260513-006",
+      "title": "Real centralized MAS supervisor refactor",
+      "kind": "fix",
+      "status": "completed",
+      "priority": "P1",
+      "owner": "codex",
+      "file_path": "docs/plans/active/PLAN-20260513-006.md",
+      "confirmed_by_user": true,
+      "created_at": "2026-05-26T00:00:00Z",
+      "updated_at": "2026-05-26T00:00:00Z",
+      "archived_at": null,
+      "notes": [
+        {
+          "at": "2026-05-26T00:00:00Z",
+          "text": "Created after architecture review found commit 5f47149 shipped a scripted stance-template stub as the default centralized MAS path with no LLM calls and bypassed the product allowlist. User confirmed direction: replace the stub with a real LLM-driven supervisor that emits assignment contracts, reuse the existing LLMRoomExecutor specialist machinery, route central_mas through the planning-artifacts allowlist, and add H4-style negative regressions previously deferred."
+        },
+        {
+          "at": "2026-05-26T00:00:00Z",
+          "text": "S1-S5 closed in a single session. central_mas.py is now an LLMSupervisor that emits real assignment contracts via one LLM call per round; central_executor.py composes LLMSupervisor with the existing LLMRoomExecutor specialist + synthesis machinery so the centralized topology shares the same provider/routing/retry/parse semantics. CentralizedRequirementPlanner and its answer-shaped _central_constraints helper are deleted. DECISION_ROOM_EXECUTOR default reverted to llm and centralized mode returns UnavailableRoomExecutor when provider env is missing. Frontend reads central_mas through a schema-gated readLatestCentralMasState that drops non-supervisor topologies and unknown fields. Backend 80 tests OK; frontend 9 contract tests OK; production build green."
         }
       ]
     }
