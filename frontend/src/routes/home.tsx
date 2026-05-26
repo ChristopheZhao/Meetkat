@@ -91,6 +91,22 @@ function formatExecutorTargets(readiness: RuntimeReadiness): string {
     .join(" · ");
 }
 
+function composeRequirementWithClarifications(
+  requirement: string,
+  clarifications: Record<string, string>,
+): string {
+  const entries = Object.entries(clarifications)
+    .map(([question, answer]) => [question.trim(), answer.trim()] as const)
+    .filter(([question, answer]) => question && answer);
+  if (entries.length === 0) {
+    return requirement;
+  }
+  const block = entries
+    .map(([question, answer]) => `- ${question}: ${answer}`)
+    .join("\n");
+  return `${requirement.trim()}\n\n[Operator clarifications]\n${block}`;
+}
+
 export function HomePage() {
   const initialRooms = useLoaderData() as RoomSummary[];
   const navigate = useNavigate();
@@ -101,6 +117,7 @@ export function HomePage() {
   const [preflightReport, setPreflightReport] = useState<RoomPreflightReport | null>(
     null,
   );
+  const [clarifications, setClarifications] = useState<Record<string, string>>({});
 
   const roomsQuery = useQuery({
     queryKey: ["rooms"],
@@ -127,40 +144,42 @@ export function HomePage() {
   const handleRequirementChange = (nextRequirement: string) => {
     setRequirement(nextRequirement);
     setPreflightReport(null);
+    setClarifications({});
     preflightMutation.reset();
     createMutation.reset();
   };
 
-  const runPreflight = async (): Promise<RoomPreflightReport> => {
-    createMutation.reset();
-    preflightMutation.reset();
-    setPreflightReport(null);
-    return preflightMutation.mutateAsync({
-      requirement,
-      allow_planner_fallback: false,
-      entry_scope: HOME_ENTRY_SCOPE,
-    });
+  const handleClarificationChange = (question: string, answer: string) => {
+    setClarifications((prev) => ({ ...prev, [question]: answer }));
   };
 
   const handleCheckPreflight = async () => {
+    createMutation.reset();
+    preflightMutation.reset();
     try {
-      await runPreflight();
+      await preflightMutation.mutateAsync({
+        requirement: composeRequirementWithClarifications(requirement, clarifications),
+        allow_planner_fallback: false,
+        entry_scope: HOME_ENTRY_SCOPE,
+      });
     } catch {
       // Surface errors through the mutation state.
     }
   };
 
   const handleCreateRoom = async (event: FormEvent<HTMLFormElement>) => {
+    // Primary "Open room" path: never silently aborts. Preflight findings (if
+    // any) flow into the room as contextual context rather than blocking the
+    // operator before any agent has spoken. Operator clarifications, when
+    // present, are appended to the requirement so the planner sees them.
     event.preventDefault();
+    createMutation.reset();
     try {
-      const report = await runPreflight();
-      if (!report.room_start_contract.room_start_ready) {
-        return;
-      }
       await createMutation.mutateAsync({
-        requirement,
+        requirement: composeRequirementWithClarifications(requirement, clarifications),
         mode: "agent_first",
-        require_preflight_ready: true,
+        require_preflight_ready: false,
+        allow_planner_fallback: true,
         entry_scope: HOME_ENTRY_SCOPE,
       });
     } catch (error) {
@@ -217,9 +236,10 @@ export function HomePage() {
             />
           </label>
           <p className={styles.helper}>
-            The default runtime uses a local central supervisor MAS, so the room
-            is usable without external provider credentials. Provider-backed LLM
-            execution remains available through runtime env configuration.
+            Open room creates the meeting immediately and lets the agents
+            discuss unresolved questions in-room. Check room start runs the
+            preflight planner first and lets you fill missing operator inputs
+            before the agents speak.
           </p>
           <div className={styles.buttonRow}>
             <button
@@ -320,13 +340,39 @@ export function HomePage() {
                 </div>
               ))}
               {roomStartContract && roomStartContract.missing_operator_inputs.length > 0 ? (
-                <div>
-                  <p className={styles.listTitle}>Missing operator inputs</p>
-                  <ul className={styles.checklist}>
+                <div className={styles.clarificationBlock}>
+                  <p className={styles.listTitle}>
+                    Missing operator inputs — answer here to re-check, or open
+                    the room anyway and let the agents treat them as open
+                    questions
+                  </p>
+                  <div className={styles.clarificationList}>
                     {roomStartContract.missing_operator_inputs.map((item) => (
-                      <li key={item}>{item}</li>
+                      <label className={styles.clarificationItem} key={item}>
+                        <span>{item}</span>
+                        <textarea
+                          rows={2}
+                          value={clarifications[item] ?? ""}
+                          onChange={(event) =>
+                            handleClarificationChange(item, event.target.value)
+                          }
+                          placeholder="Optional: provide the answer to lift this blocker before room start."
+                        />
+                      </label>
                     ))}
-                  </ul>
+                  </div>
+                  <div className={styles.clarificationActions}>
+                    <button
+                      type="button"
+                      className={styles.secondaryButton}
+                      onClick={() => void handleCheckPreflight()}
+                      disabled={isSubmitting}
+                    >
+                      {preflightMutation.isPending
+                        ? "Re-checking..."
+                        : "Save clarifications and re-check"}
+                    </button>
+                  </div>
                 </div>
               ) : null}
               <div className={styles.preflightLists}>

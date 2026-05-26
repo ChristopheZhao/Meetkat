@@ -171,10 +171,12 @@ export type CreateRoomInput = {
   allow_planner_fallback?: boolean;
   require_preflight_ready?: boolean;
   entry_scope?: string;
+  operator_context?: Record<string, unknown>;
 };
 
 export type PreflightRoomInput = {
   requirement: string;
   allow_planner_fallback?: boolean;
   entry_scope?: string;
+  operator_context?: Record<string, unknown>;
 };
