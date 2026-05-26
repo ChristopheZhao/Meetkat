@@ -89,46 +89,33 @@ class HttpApiRuntimeBootstrapTests(unittest.IsolatedAsyncioTestCase):
             self.runtime = build_runtime_from_env(config=RuntimeConfig())
             load_dotenv.assert_called_once()
 
-    async def test_build_runtime_from_env_defaults_to_centralized_mas(self) -> None:
+    async def test_build_runtime_from_env_defaults_to_llm_topology_unavailable_without_env(
+        self,
+    ) -> None:
+        self.runtime = build_runtime_from_env({}, config=RuntimeConfig())
+
+        readiness = self.runtime.runtime_readiness()
+        self.assertEqual(readiness["planner_mode"], "primary_with_fallback")
+        self.assertEqual(readiness["executor_mode"], "llm")
+        self.assertFalse(readiness["primary_planner_ready"])
+        self.assertFalse(readiness["executor_ready"])
+        self.assertIn("MODEL_DEFAULT_SUPPLIER", readiness["executor_missing_env"])
+
+    async def test_build_runtime_from_env_centralized_mode_requires_provider_env(self) -> None:
         self.runtime = build_runtime_from_env(
-            {},
-            config=RuntimeConfig(
-                message_chunk_delay_sec=0.0,
-                between_turn_delay_sec=0.0,
-                between_round_delay_sec=0.0,
-                max_rounds=5,
-            ),
+            {"DECISION_ROOM_EXECUTOR": "centralized"},
+            config=RuntimeConfig(),
         )
 
         readiness = self.runtime.runtime_readiness()
-        self.assertEqual(readiness["planner_mode"], "centralized")
         self.assertEqual(readiness["executor_mode"], "centralized")
-        self.assertTrue(readiness["primary_planner_ready"])
-        self.assertTrue(readiness["executor_ready"])
-
-        snapshot = await self.runtime.create_room(
-            requirement=(
-                "Should we adopt a centralized MAS architecture for online "
-                "engineering decision rooms with real communication and clear governance?"
-            ),
-            require_preflight_ready=True,
-            entry_scope="interactive_room_start",
+        self.assertFalse(readiness["executor_ready"])
+        self.assertTrue(str(readiness["executor_reason"]).strip())
+        self.assertIn("MODEL_DEFAULT_SUPPLIER", readiness["executor_missing_env"])
+        self.assertEqual(
+            readiness["executor_guardrails"]["topology"],
+            "single_supervisor_shared_memory",
         )
-
-        await self._wait_until(
-            lambda: self.runtime.get_snapshot(snapshot["room_id"])["status"] == "ended"
-        )
-        current = self.runtime.get_snapshot(snapshot["room_id"])
-        self.assertEqual(current["brief_source"], "agent")
-        self.assertEqual(current["conclusion_type"], "decision_ready")
-        self.assertGreater(len(current["transcript"]), 0)
-        host_messages = [
-            item
-            for item in current["transcript"]
-            if item["role"] == "host" and item["event_type"] == "agent.message"
-        ]
-        self.assertTrue(host_messages)
-        self.assertIn("central_mas", host_messages[0]["artifacts"])
 
     async def test_build_runtime_from_env_exposes_provider_targets_in_readiness(self) -> None:
         self.runtime = build_runtime_from_env(

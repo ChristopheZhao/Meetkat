@@ -288,35 +288,6 @@ class HeuristicRequirementPlanner:
         )
 
 
-class CentralizedRequirementPlanner:
-    """Local semantic planner for the centralized supervisor MAS path."""
-
-    def plan_requirement(self, requirement: str) -> MeetingBrief:
-        normalized = _normalize(requirement)
-        topic = _topic_from_requirement(normalized)
-        decision_object = _decision_object(normalized)
-        constraints = _central_constraints(normalized)
-        open_questions = _central_open_questions(normalized)
-        return MeetingBrief(
-            requirement=normalized,
-            topic=topic,
-            goal=(
-                f"Reach an executable decision on {decision_object} with explicit "
-                "architecture, product, risk, and follow-up evidence."
-            ),
-            constraints=constraints,
-            open_questions=open_questions,
-            current_focus=(
-                "let the central supervisor assign specialist agents, expose the "
-                "tradeoff map, and build a decision record from shared room memory"
-            ),
-            room_start_contract=RoomStartContractDraft(
-                operator_required_inputs=[],
-                contextual_open_questions=open_questions[:2],
-            ),
-        )
-
-
 def build_meeting_brief_from_requirement(requirement: str) -> MeetingBrief:
     """Build a diagnostic fallback brief without semantic inference."""
     return _merge_system_constraints(
@@ -482,55 +453,6 @@ def _truncate_requirement(text: str, limit: int = 80) -> str:
     if len(text) <= limit:
         return text
     return f"{text[: limit - 3].rstrip()}..."
-
-
-def _topic_from_requirement(text: str) -> str:
-    first = re.split(r"[.!?。！？]", text, maxsplit=1)[0].strip()
-    if not first:
-        return "Centralized MAS decision"
-    if len(first) <= 82:
-        return first
-    return f"{first[:79].rstrip()}..."
-
-
-def _decision_object(text: str) -> str:
-    normalized = text.lower()
-    if "central" in normalized or "中心" in normalized or "mas" in normalized:
-        return "centralized multi-agent system delivery"
-    if "architecture" in normalized or "架构" in normalized:
-        return "the architecture direction"
-    if "product" in normalized or "产品" in normalized:
-        return "the product decision"
-    return _topic_from_requirement(text).lower()
-
-
-def _central_constraints(text: str) -> list[str]:
-    constraints = [
-        "Use a single supervisor to own agent assignment and convergence decisions.",
-        "Use shared room memory and replayable events as the communication substrate.",
-        "Keep runtime/control/governance boundaries separate from role semantics.",
-    ]
-    lowered = text.lower()
-    if any(token in lowered for token in ("online", "websocket", "communication", "通信", "在线")):
-        constraints.append("Online communication must be backed by WebSocket with SSE replay fallback.")
-    if any(token in lowered for token in ("visual", "ui", "ux", "视觉", "交互")):
-        constraints.append("The product UI must show agent roles, assignment contracts, and live evidence.")
-    if any(token in lowered for token in ("image", "background", "avatar", "image-gen")):
-        constraints.append("Meeting background and agent role visuals must be real raster assets.")
-    return constraints[:6]
-
-
-def _central_open_questions(text: str) -> list[str]:
-    questions = [
-        "Which release gate proves the communication path is live instead of mocked?",
-        "What evidence should close the decision after architecture, product, and risk agents speak?",
-    ]
-    lowered = text.lower()
-    if "delivery" in lowered or "交付" in text:
-        questions.append("Which remaining gap blocks this from becoming a usable delivery candidate?")
-    if "governance" in lowered or "治理" in text:
-        questions.append("Which harness semantics must stay outside the default product surface?")
-    return questions[:3]
 
 
 def _require_non_empty(value: object, field_name: str) -> str:

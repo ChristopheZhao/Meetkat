@@ -1,142 +1,404 @@
+"""Centralized MAS executor — real LLM supervisor + LLM specialists.
+
+This executor produces RoomRound outputs by:
+
+1. Calling ``LLMSupervisor.plan_round`` to choose specialists and emit one
+   assignment contract per role.
+2. Calling the existing ``LLMRoomExecutor`` specialist machinery
+   (``_generate_argument`` / ``_generate_synthesis``) for each contract so
+   the same provider, routing, retry, and JSON-parsing rules apply to both
+   topologies.
+3. Reusing ``HybridConsensusStrategy`` for convergence — convergence stays
+   signal-gated, never a round counter.
+
+If the provider env is missing the factory returns an ``UnavailableRoomExecutor``
+just like ``LLMRoomExecutor.from_mapping``; the centralized topology never
+silently emits stub output as a default.
+"""
+
 from __future__ import annotations
 
-from typing import Any
+import os
+from typing import Any, Mapping
 
-from decision_room.mas.hybrid import HybridCoordinationStrategy
-from decision_room.mas.types import ActionType, CoordinationAction
+from decision_room.mas.hybrid import (
+    HybridConsensusStrategy,
+    HybridCoordinationStrategy,
+    HybridPlanningStrategy,
+)
+from decision_room.mas.types import (
+    ActionType,
+    CoordinationAction,
+    DecisionContext,
+    MeetingPhase,
+)
+from decision_room.policies.fallback import DisasterOnlyFallbackPolicy
+from decision_room.policies.routing_control import RoutingControlPolicy
+from decision_room.providers import ProviderRegistry
+from decision_room.routing.model_router import HybridModelRouter, RouterTargets
 
-from .central_mas import CentralizedMeetingSupervisor
-from .room_executor import RoomMessage, RoomRound
+from .central_mas import (
+    AssignmentContract,
+    LLMSupervisor,
+    SupervisorPlan,
+    build_supervisor_state,
+    central_mas_artifact_bundle,
+    supervisor_plan_to_host_agenda,
+)
+from .pre_room_planning import resolve_turn_specialists
+from .room_executor import (
+    LLMRoomExecutor,
+    RoomExecutor,
+    RoomMessage,
+    RoomRound,
+    SpecialistTurnResult,
+    UnavailableRoomExecutor,
+    _dedupe_strings,
+    _env,
+    _env_int_optional,
+    _filter_answered_questions,
+    _provider_config,
+    _route_artifact,
+    _target,
+    _visible_open_questions,
+)
 
 
 class CentralizedMASExecutor:
-    """Local online MAS executor with a single supervisor and typed role nodes."""
+    """LLM-driven centralized supervisor executor."""
 
-    def __init__(self, supervisor: CentralizedMeetingSupervisor | None = None) -> None:
-        self._supervisor = supervisor or CentralizedMeetingSupervisor()
-        self._coordination = HybridCoordinationStrategy()
+    def __init__(
+        self,
+        registry: ProviderRegistry,
+        router: HybridModelRouter,
+        *,
+        supervisor: LLMSupervisor | None = None,
+        coordination: HybridCoordinationStrategy | None = None,
+        consensus: HybridConsensusStrategy | None = None,
+        planner: HybridPlanningStrategy | None = None,
+        use_background_threads: bool = True,
+        transient_max_attempts: int = 2,
+    ) -> None:
+        self._registry = registry
+        self._router = router
+        self._supervisor = supervisor or LLMSupervisor(
+            registry=registry,
+            router=router,
+            transient_max_attempts=transient_max_attempts,
+        )
+        self._coordination = coordination or HybridCoordinationStrategy()
+        self._consensus = consensus or HybridConsensusStrategy()
+        self._planner = planner or HybridPlanningStrategy()
+        # Internal specialist machinery is owned by an LLMRoomExecutor so all
+        # specialist prompts, retries, and parsers stay in one place.
+        self._specialist_runner = LLMRoomExecutor(
+            registry=registry,
+            router=router,
+            planner=self._planner,
+            coordination=self._coordination,
+            consensus=self._consensus,
+            use_background_threads=use_background_threads,
+            transient_max_attempts=transient_max_attempts,
+        )
+        self._transient_max_attempts = max(1, transient_max_attempts)
+
+    @classmethod
+    def from_env(cls) -> RoomExecutor:
+        return cls.from_mapping(os.environ)
+
+    @classmethod
+    def from_mapping(cls, env: Mapping[str, str]) -> RoomExecutor:
+        try:
+            default_supplier = _env("MODEL_DEFAULT_SUPPLIER", env)
+            default_model = _env("MODEL_DEFAULT_MODEL", env)
+            escalation_supplier = _env("MODEL_ESCALATION_SUPPLIER", env)
+            escalation_model = _env("MODEL_ESCALATION_MODEL", env)
+            fallback_supplier = _env("MODEL_FALLBACK_SUPPLIER", env)
+            fallback_model = _env("MODEL_FALLBACK_MODEL", env)
+            supplier_ids = {default_supplier, escalation_supplier, fallback_supplier}
+            registry = ProviderRegistry.from_openai_compatible_configs(
+                {supplier: _provider_config(supplier, env) for supplier in supplier_ids}
+            )
+            router = HybridModelRouter(
+                RoutingControlPolicy(DisasterOnlyFallbackPolicy()),
+                targets=RouterTargets(
+                    default_target=_target(default_supplier, default_model),
+                    escalation_target=_target(escalation_supplier, escalation_model),
+                    disaster_fallback_target=_target(fallback_supplier, fallback_model),
+                ),
+            )
+        except Exception as exc:
+            return UnavailableRoomExecutor(str(exc))
+        return cls(
+            registry=registry,
+            router=router,
+            transient_max_attempts=_env_int_optional(
+                "MODEL_REQUEST_MAX_ATTEMPTS", 2, env
+            ),
+        )
 
     async def build_round(self, snapshot: Any, round_index: int) -> RoomRound:
-        round_model = self._supervisor.build_round(snapshot, round_index)
-        host_message = RoomMessage(
-            role="host",
-            title="Supervisor dispatch",
-            text=self._host_text(round_model),
-            artifacts={
-                "central_mas": {
-                    "topology": "single_supervisor_shared_memory",
-                    "supervisor_state": round_model.supervisor_state.to_payload(),
-                    "role_catalog": [
-                        item.to_payload() for item in round_model.role_catalog
-                    ],
-                    "assignment_contracts": [
-                        item.to_payload()
-                        for item in round_model.supervisor_state.assignment_contracts
-                    ],
-                },
-                "next_focus": round_model.next_focus,
-                "round_goal": "collect specialist evidence and preserve one owner for task routing",
-                "target_roles": [
-                    product.role.role for product in round_model.work_products
-                ],
-                "turns": [
-                    {
-                        "role": contract.agent,
-                        "task": contract.mission,
-                    }
-                    for contract in round_model.supervisor_state.assignment_contracts
-                    if contract.run
-                ],
-            },
+        runner = self._specialist_runner
+        phase = runner._phase_for_round(snapshot, round_index)  # noqa: SLF001
+        routing_signals = runner._signals_for_round(snapshot, round_index)  # noqa: SLF001
+        topic = snapshot.topic or "centralized MAS decision room"
+        ctx = DecisionContext(
+            room_id=snapshot.room_id,
+            phase=phase,
+            signals=routing_signals,
+            metadata={"topic": topic, "topology": "centralized_supervisor"},
         )
-        specialist_messages = [
-            RoomMessage(
-                role=product.role.role,
-                title=product.title,
-                text=product.text,
-                artifacts={
-                    "claim": product.claim,
-                    "evidence": list(product.evidence),
-                    "confidence": product.confidence,
-                    "target_claim_ref": product.target_claim_ref,
-                    "turn_task": round_model.supervisor_state.assignment_contracts[
-                        index
-                    ].mission,
-                    "agent_role_contract": product.role.to_payload(),
-                },
+        plan_decision = self._planner.plan(ctx)
+        next_focus = runner._resolve_focus(snapshot, plan_decision.next_focus)  # noqa: SLF001
+        route_ctx = ctx
+        route = self._router.route(route_ctx)
+
+        supervisor_plan, route_ctx, route = await self._supervisor.plan_round(
+            snapshot=snapshot,
+            round_index=round_index,
+            phase=phase,
+            next_focus=next_focus,
+            route_ctx=route_ctx,
+            route=route,
+        )
+        host_agenda = supervisor_plan_to_host_agenda(supervisor_plan)
+        runnable = supervisor_plan.runnable_contracts()
+        if not runnable:
+            raise RuntimeError("supervisor returned no runnable assignment contracts")
+        specialist_pairs = _resolve_contract_specialists(snapshot, runnable)
+        if not specialist_pairs:
+            raise RuntimeError(
+                "supervisor assignment contracts did not resolve to any planned specialist"
             )
-            for index, product in enumerate(round_model.work_products)
-        ]
+        coordination = self._coordination_for_contracts(ctx, specialist_pairs)
+
+        host_message = self._build_supervisor_message(
+            snapshot=snapshot,
+            phase=phase,
+            round_index=round_index,
+            next_focus=next_focus,
+            route=route,
+            plan=supervisor_plan,
+            target_roles=[specialist.role for specialist, _contract in specialist_pairs],
+        )
+
+        turn_results: list[SpecialistTurnResult] = []
+        target_claim_ref = ""
+        for specialist, contract in specialist_pairs:
+            output, route_ctx, turn_route = await runner._generate_argument(  # noqa: SLF001
+                route_ctx=route_ctx,
+                route=route,
+                specialist=specialist,
+                turn_task=contract.mission,
+                snapshot=snapshot,
+                phase=phase,
+                round_index=round_index,
+                next_focus=next_focus,
+                host_agenda=host_agenda,
+                target_claim_ref=target_claim_ref,
+            )
+            route = turn_route
+            turn_results.append(
+                SpecialistTurnResult(
+                    specialist=specialist,
+                    task=contract.mission,
+                    output=output,
+                    route=turn_route,
+                )
+            )
+            target_claim_ref = output.claim
+
+        synthesis_output, route_ctx, synthesis_route = await runner._generate_synthesis(  # noqa: SLF001
+            route_ctx=route_ctx,
+            route=route,
+            snapshot=snapshot,
+            phase=phase,
+            round_index=round_index,
+            next_focus=next_focus,
+            host_agenda=host_agenda,
+            turn_results=turn_results,
+        )
+
+        open_questions = _dedupe_strings(
+            [
+                *_visible_open_questions(snapshot),
+                *host_agenda.open_questions,
+                *_filter_answered_questions(snapshot, synthesis_output.open_questions),
+            ],
+            limit=6,
+        )
+        post_signals = runner._signals_after_round(  # noqa: SLF001
+            snapshot=snapshot,
+            round_index=round_index,
+            open_questions=open_questions,
+            synthesis_output=synthesis_output,
+        )
+        consensus = self._consensus.evaluate(
+            DecisionContext(
+                room_id=snapshot.room_id,
+                phase=phase,
+                signals=post_signals,
+                metadata={"topic": topic, "topology": "centralized_supervisor"},
+            )
+        )
+
+        messages: list[RoomMessage] = [host_message]
+        for turn_index, turn_result in enumerate(turn_results, start=1):
+            contract = runnable[turn_index - 1]
+            messages.append(
+                RoomMessage(
+                    role=turn_result.specialist.role,
+                    title=turn_result.output.title,
+                    text=turn_result.output.text,
+                    artifacts={
+                        "claim": turn_result.output.claim,
+                        "evidence": turn_result.output.evidence,
+                        "confidence": turn_result.output.confidence,
+                        "target_claim_ref": turn_result.output.target_claim_ref,
+                        "specialist_display_name": turn_result.specialist.display_name,
+                        "capability_profile": turn_result.specialist.capability_profile,
+                        "turn_task": turn_result.task,
+                        "turn_index": turn_index,
+                        "route": _route_artifact(turn_result.route),
+                        "assignment_contract": contract.to_payload(),
+                    },
+                )
+            )
         synthesis_message = RoomMessage(
             role="synthesis",
-            title="Decision synthesis",
-            text=self._synthesis_text(round_model),
+            title=synthesis_output.title,
+            text=synthesis_output.text,
             artifacts={
-                "agreement": list(round_model.agreement),
-                "disagreement": list(round_model.disagreement),
-                "decision_candidate": round_model.decision_candidate,
-                "action_item_draft": list(round_model.action_items),
+                "agreement": synthesis_output.agreement,
+                "disagreement": synthesis_output.disagreement,
+                "open_questions": open_questions,
+                "decision_candidate": synthesis_output.decision_candidate,
+                "action_item_draft": synthesis_output.action_item_draft,
+                "conclusion_type": synthesis_output.conclusion_type,
+                "conclusion_reason": synthesis_output.conclusion_reason,
+                "route": _route_artifact(synthesis_route),
                 "central_mas_state_ref": "host.artifacts.central_mas.supervisor_state",
             },
         )
-        coordination = self._coordination.next_action(
-            self._coordination_context(snapshot, round_model)
+        summary_text = (
+            f"{synthesis_output.text} Conclusion: {synthesis_output.conclusion_type}. "
+            f"{synthesis_output.conclusion_reason} Consensus score {consensus.score:.2f}. "
+            f"{consensus.reason}."
         )
-        if specialist_messages:
-            coordination = CoordinationAction(
-                action_type=ActionType.HANDOFF,
-                target_role=specialist_messages[0].role,
-                reason="central supervisor assigned the first specialist turn from shared memory",
-            )
+        should_end, end_reason = runner._resolve_round_end_signal(  # noqa: SLF001
+            snapshot=snapshot,
+            round_index=round_index,
+            synthesis_output=synthesis_output,
+            consensus=consensus,
+        )
         return RoomRound(
-            phase=round_model.phase,
-            signals=round_model.signals,
-            plan_topic=getattr(snapshot, "topic", "") or "centralized MAS decision room",
-            next_focus=round_model.next_focus,
+            phase=phase,
+            signals=post_signals,
+            plan_topic=plan_decision.topic,
+            next_focus=next_focus,
             coordination=coordination,
-            consensus_score=round_model.signals.support,
-            consensus_should_end=round_model.should_end,
-            should_end=round_model.should_end,
-            consensus_reason=(
-                "central supervisor reached a working decision threshold"
-                if round_model.should_end
-                else "central supervisor needs another evidence pass"
-            ),
-            end_reason=round_model.conclusion_reason if round_model.should_end else "",
-            messages=[host_message, *specialist_messages],
-            decision_candidate=round_model.decision_candidate,
-            action_items=round_model.action_items,
-            open_questions=round_model.open_questions,
-            summary_text=self._synthesis_text(round_model),
-            conclusion_type=round_model.conclusion_type,
-            conclusion_reason=round_model.conclusion_reason,
+            consensus_score=consensus.score,
+            consensus_should_end=consensus.should_end,
+            should_end=should_end,
+            consensus_reason=consensus.reason,
+            end_reason=end_reason,
+            messages=messages,
+            decision_candidate=synthesis_output.decision_candidate,
+            action_items=synthesis_output.action_item_draft,
+            open_questions=open_questions,
+            summary_text=summary_text,
+            conclusion_type=synthesis_output.conclusion_type,
+            conclusion_reason=synthesis_output.conclusion_reason,
             synthesis_message=synthesis_message,
         )
 
-    def _host_text(self, round_model: Any) -> str:
-        assignments = round_model.supervisor_state.assignment_contracts
-        assignment_text = " ".join(
-            f"{item.agent}: {item.deliverable}" for item in assignments if item.run
-        )
-        return (
-            f"Central supervisor round {round_model.supervisor_state.round_index} "
-            f"is in {round_model.phase.value}. Focus: {round_model.next_focus}. "
-            f"I am assigning typed role nodes from shared room memory. {assignment_text}"
+    def _coordination_for_contracts(
+        self,
+        ctx: DecisionContext,
+        specialist_pairs: list[tuple[Any, AssignmentContract]],
+    ) -> CoordinationAction:
+        coordination = self._coordination.next_action(ctx)
+        if coordination.action_type not in {ActionType.HANDOFF, ActionType.SPEAK}:
+            return coordination
+        if not specialist_pairs:
+            return CoordinationAction(
+                action_type=coordination.action_type,
+                reason=coordination.reason,
+            )
+        target_role = specialist_pairs[0][0].role
+        return CoordinationAction(
+            action_type=coordination.action_type,
+            reason=coordination.reason,
+            target_role=target_role,
+            payload=dict(coordination.payload),
         )
 
-    def _synthesis_text(self, round_model: Any) -> str:
-        return (
-            f"Decision candidate: {round_model.decision_candidate} "
-            f"Agreement: {' '.join(round_model.agreement)} "
-            f"Remaining disagreement: {' '.join(round_model.disagreement)}"
+    def _build_supervisor_message(
+        self,
+        *,
+        snapshot: Any,
+        phase: MeetingPhase,
+        round_index: int,
+        next_focus: str,
+        route: Any,
+        plan: SupervisorPlan,
+        target_roles: list[str],
+    ) -> RoomMessage:
+        supervisor_state = build_supervisor_state(
+            snapshot=snapshot,
+            round_index=round_index,
+            plan=plan,
+        )
+        assignment_lines = [
+            f"{contract.agent}: {contract.deliverable}"
+            for contract in plan.runnable_contracts()
+        ]
+        text = (
+            f"Supervisor round {round_index} ({phase.value}). "
+            f"Decision focus: {plan.decision_focus or next_focus}. "
+            f"Reason: {plan.reason}. "
+            f"Assignments: {'; '.join(assignment_lines)}"
+        )
+        if snapshot.last_human_message:
+            text += f"\nHuman input to incorporate: {snapshot.last_human_message}"
+        return RoomMessage(
+            role="host",
+            title="Supervisor dispatch",
+            text=text,
+            artifacts={
+                "next_focus": next_focus,
+                "round_goal": snapshot.goal,
+                "target_roles": target_roles,
+                "focus_points": [
+                    {
+                        "title": plan.decision_focus or next_focus,
+                        "reason": plan.reason,
+                        "constraint_ids": [],
+                    }
+                ],
+                "turns": [
+                    {"role": contract.agent, "task": contract.mission}
+                    for contract in plan.runnable_contracts()
+                ],
+                "open_questions": list(plan.open_questions),
+                "route": _route_artifact(route),
+                "central_mas": central_mas_artifact_bundle(
+                    state=supervisor_state,
+                    plan=plan,
+                    route=route,
+                ),
+            },
         )
 
-    def _coordination_context(self, snapshot: Any, round_model: Any) -> Any:
-        from decision_room.mas.types import DecisionContext
 
-        return DecisionContext(
-            room_id=getattr(snapshot, "room_id", ""),
-            phase=round_model.phase,
-            signals=round_model.signals,
-            metadata={"topology": "centralized_supervisor"},
-        )
+def _resolve_contract_specialists(
+    snapshot: Any,
+    contracts: list[AssignmentContract],
+) -> list[tuple[Any, AssignmentContract]]:
+    requested_roles = [contract.agent for contract in contracts]
+    resolved = resolve_turn_specialists(snapshot, requested_roles)
+    pairs: list[tuple[Any, AssignmentContract]] = []
+    for specialist, contract in zip(resolved, contracts):
+        if specialist.role == contract.agent:
+            pairs.append((specialist, contract))
+    return pairs

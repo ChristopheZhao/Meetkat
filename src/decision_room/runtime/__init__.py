@@ -1,5 +1,4 @@
 from decision_room.orchestration.brief_planner import (
-    CentralizedRequirementPlanner,
     HeuristicRequirementPlanner,
     LLMRequirementPlanner,
     MeetingBrief,

@@ -1,0 +1,411 @@
+import json
+import unittest
+
+from decision_room.orchestration.central_executor import CentralizedMASExecutor
+from decision_room.orchestration.central_mas import (
+    AssignmentContract,
+    LLMSupervisor,
+    parse_supervisor_plan,
+    role_catalog_from_snapshot,
+)
+from decision_room.orchestration.room_executor import UnavailableRoomExecutor
+from decision_room.mas.types import MeetingPhase
+from decision_room.policies.fallback import DisasterOnlyFallbackPolicy
+from decision_room.policies.routing_control import RoutingControlPolicy
+from decision_room.providers import GenerateResponse, ProviderRegistry
+from decision_room.routing.model_router import HybridModelRouter, RouterTargets
+from decision_room.runtime.room_models import RoomSnapshot
+
+
+SPECIALIST_ROSTER = [
+    {
+        "role": "implementation_specialist",
+        "display_name": "Implementation Specialist",
+        "capability_profile": "Evaluates feasibility and integration shape.",
+        "prompt_contract": "Stay concrete and implementation-grounded.",
+        "join_reason": "Runtime work needs engineering judgment.",
+        "focus_areas": ["feasibility"],
+        "ttl_rounds": 2,
+        "turn_budget": 1,
+    },
+    {
+        "role": "risk_specialist",
+        "display_name": "Risk Specialist",
+        "capability_profile": "Surfaces failure and recovery risk.",
+        "prompt_contract": "Keep unresolved runtime risks explicit.",
+        "join_reason": "Need challenge-oriented analysis.",
+        "focus_areas": ["recovery"],
+        "ttl_rounds": 2,
+        "turn_budget": 1,
+    },
+    {
+        "role": "product_specialist",
+        "display_name": "Product Specialist",
+        "capability_profile": "Keeps the room aligned with user goals.",
+        "prompt_contract": "Argue from user impact and workflow visibility.",
+        "join_reason": "Need product grounding.",
+        "focus_areas": ["workflow"],
+        "ttl_rounds": 2,
+        "turn_budget": 1,
+    },
+]
+
+
+def _snapshot(
+    *,
+    requirement: str = "Build a centralized multi-agent decision room with real LLM agents.",
+    topic: str = "Centralized MAS decision room",
+    goal: str = "Reach an executable decision with explicit role contracts.",
+    current_focus: str = "kick off supervisor planning",
+    constraints: list[str] | None = None,
+) -> RoomSnapshot:
+    return RoomSnapshot(
+        room_id="room_test",
+        requirement=requirement,
+        topic=topic,
+        goal=goal,
+        current_focus=current_focus,
+        constraints=list(constraints or ["WebSocket primary, SSE fallback."]),
+        planning_artifacts={"candidate_specialist_roster": SPECIALIST_ROSTER},
+    )
+
+
+def _target(supplier: str = "qwen", model: str = "test-model"):
+    from decision_room.mas.types import ModelTarget
+
+    return ModelTarget(supplier=supplier, model=model)
+
+
+def _router() -> HybridModelRouter:
+    return HybridModelRouter(
+        RoutingControlPolicy(DisasterOnlyFallbackPolicy()),
+        targets=RouterTargets(
+            default_target=_target(),
+            escalation_target=_target(),
+            disaster_fallback_target=_target(),
+        ),
+    )
+
+
+def _supervisor_payload(
+    *,
+    requirement_hint: str,
+    selected_roles: list[str],
+) -> str:
+    contracts = [
+        {
+            "agent": role,
+            "run": True,
+            "mission": (
+                f"For requirement '{requirement_hint[:40]}', drive the {role} contribution "
+                "into a concrete recommendation."
+            ),
+            "deliverable": f"{role} readout",
+            "constraints": ["respond only with grounded evidence"],
+            "order": index + 1,
+            "runtime_hints": {"phase": "explore"},
+        }
+        for index, role in enumerate(selected_roles)
+    ]
+    return json.dumps(
+        {
+            "current_focus": f"close gaps in '{requirement_hint[:30]}'",
+            "decision_focus": f"converge on direction for '{requirement_hint[:30]}'",
+            "phase": "explore",
+            "reason": "supervisor selected specialists relevant to this round",
+            "open_questions": [],
+            "assignment_contracts": contracts,
+        }
+    )
+
+
+class SupervisorScriptedProvider:
+    """Returns supervisor JSON keyed by the user prompt, plus reuses the
+    existing FakeProvider-style canned responses for specialist + synthesis.
+    """
+
+    def __init__(self, selected_roles: list[str]) -> None:
+        self.selected_roles = selected_roles
+        self.supervisor_user_prompts: list[str] = []
+        self.specialist_user_prompts: list[str] = []
+
+    def generate(self, req):
+        if "central supervisor" in req.system_prompt:
+            self.supervisor_user_prompts.append(req.user_prompt)
+            requirement_hint = ""
+            if "requirement" in req.user_prompt:
+                marker = '"requirement": "'
+                start = req.user_prompt.find(marker)
+                if start >= 0:
+                    end = req.user_prompt.find('"', start + len(marker))
+                    if end > start:
+                        requirement_hint = req.user_prompt[start + len(marker) : end]
+            return GenerateResponse(
+                text=_supervisor_payload(
+                    requirement_hint=requirement_hint or "central decision",
+                    selected_roles=self.selected_roles,
+                ),
+                raw_response="",
+            )
+        if "Implementation Specialist" in req.system_prompt:
+            self.specialist_user_prompts.append(req.user_prompt)
+            return GenerateResponse(
+                text=(
+                    '{"title": "Implementation readout", "text": "Implementation feasibility argument.", '
+                    '"claim": "Adopt the supervisor-driven topology with replayable journal events.", '
+                    '"evidence": ["Journal stays SoT.", "Supervisor handles role assignment."], '
+                    '"confidence": 0.74, "target_claim_ref": ""}'
+                ),
+                raw_response="",
+            )
+        if "Risk Specialist" in req.system_prompt:
+            return GenerateResponse(
+                text=(
+                    '{"title": "Risk readout", "text": "Failure mode analysis.", '
+                    '"claim": "Override and replay must stay first-class.", '
+                    '"evidence": ["Without override the supervisor cannot be stopped.", "Replay covers crash recovery."], '
+                    '"confidence": 0.66, "target_claim_ref": "Adopt the supervisor-driven topology with replayable journal events."}'
+                ),
+                raw_response="",
+            )
+        if "Product Specialist" in req.system_prompt:
+            return GenerateResponse(
+                text=(
+                    '{"title": "Product readout", "text": "Operator workflow consideration.", '
+                    '"claim": "Operators need visible assignment contracts in the room UI.", '
+                    '"evidence": ["UI must show contracts.", "Decision focus must be visible."], '
+                    '"confidence": 0.71, "target_claim_ref": "Override and replay must stay first-class."}'
+                ),
+                raw_response="",
+            )
+        return GenerateResponse(
+            text=(
+                '{"title": "Synthesis", "text": "Synthesis aligns on supervisor-driven direction.", '
+                '"agreement": ["Journal stays SoT."], '
+                '"disagreement": [], '
+                '"open_questions": ["What metric closes the decision?"], '
+                '"decision_candidate": "Adopt LLM supervisor with assignment contracts.", '
+                '"action_item_draft": ["Wire frontend allowlist for central_mas."], '
+                '"conclusion_type": "follow_up_required", '
+                '"conclusion_reason": "Direction confirmed, follow-up implementation needed.", '
+                '"should_end_meeting": false}'
+            ),
+            raw_response="",
+        )
+
+
+class ParseSupervisorPlanTests(unittest.TestCase):
+    def test_parse_rejects_roles_outside_catalog(self) -> None:
+        snapshot = _snapshot()
+        catalog = role_catalog_from_snapshot(snapshot)
+        payload = json.dumps(
+            {
+                "current_focus": "ignored",
+                "decision_focus": "ignored",
+                "phase": "explore",
+                "reason": "test",
+                "open_questions": [],
+                "assignment_contracts": [
+                    {
+                        "agent": "implementation_specialist",
+                        "run": True,
+                        "mission": "do feasibility",
+                        "deliverable": "readout",
+                        "order": 1,
+                    },
+                    {
+                        "agent": "rogue_role",
+                        "run": True,
+                        "mission": "rogue",
+                        "deliverable": "rogue",
+                        "order": 2,
+                    },
+                ],
+            }
+        )
+        plan = parse_supervisor_plan(
+            payload,
+            role_catalog=catalog,
+            phase=MeetingPhase.EXPLORE,
+            fallback_focus="fallback",
+        )
+        self.assertEqual([c.agent for c in plan.assignment_contracts], ["implementation_specialist"])
+
+    def test_parse_drops_contracts_missing_mission_or_deliverable(self) -> None:
+        snapshot = _snapshot()
+        catalog = role_catalog_from_snapshot(snapshot)
+        payload = json.dumps(
+            {
+                "current_focus": "",
+                "phase": "explore",
+                "assignment_contracts": [
+                    {"agent": "implementation_specialist", "mission": "", "deliverable": "x"},
+                    {"agent": "risk_specialist", "mission": "do risk", "deliverable": ""},
+                    {"agent": "product_specialist", "mission": "real", "deliverable": "real"},
+                ],
+            }
+        )
+        plan = parse_supervisor_plan(
+            payload,
+            role_catalog=catalog,
+            phase=MeetingPhase.EXPLORE,
+            fallback_focus="fallback",
+        )
+        self.assertEqual([c.agent for c in plan.assignment_contracts], ["product_specialist"])
+
+    def test_parse_raises_on_empty_contract_list(self) -> None:
+        snapshot = _snapshot()
+        catalog = role_catalog_from_snapshot(snapshot)
+        payload = json.dumps({"assignment_contracts": []})
+        with self.assertRaises(ValueError):
+            parse_supervisor_plan(
+                payload,
+                role_catalog=catalog,
+                phase=MeetingPhase.EXPLORE,
+                fallback_focus="fallback",
+            )
+
+
+class LLMSupervisorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_plan_round_returns_plan_with_real_contracts(self) -> None:
+        provider = SupervisorScriptedProvider(
+            selected_roles=["implementation_specialist", "risk_specialist", "product_specialist"]
+        )
+        registry = ProviderRegistry({"qwen": provider})
+        supervisor = LLMSupervisor(registry=registry, router=_router())
+        snapshot = _snapshot()
+        from decision_room.mas.types import DecisionContext, DecisionSignals
+
+        ctx = DecisionContext(
+            room_id=snapshot.room_id,
+            phase=MeetingPhase.EXPLORE,
+            signals=DecisionSignals(),
+        )
+        route = _router().route(ctx)
+
+        plan, _new_ctx, _new_route = await supervisor.plan_round(
+            snapshot=snapshot,
+            round_index=1,
+            phase=MeetingPhase.EXPLORE,
+            next_focus="kick off",
+            route_ctx=ctx,
+            route=route,
+        )
+        self.assertEqual(
+            [c.agent for c in plan.assignment_contracts],
+            ["implementation_specialist", "risk_specialist", "product_specialist"],
+        )
+        for contract in plan.assignment_contracts:
+            self.assertTrue(contract.mission.strip())
+            self.assertTrue(contract.deliverable.strip())
+            self.assertTrue(contract.run)
+        self.assertTrue(plan.decision_focus.strip())
+
+
+class CentralizedMASExecutorTests(unittest.IsolatedAsyncioTestCase):
+    async def _build_executor(
+        self,
+        selected_roles: list[str],
+    ) -> tuple[CentralizedMASExecutor, SupervisorScriptedProvider]:
+        provider = SupervisorScriptedProvider(selected_roles=selected_roles)
+        registry = ProviderRegistry({"qwen": provider})
+        executor = CentralizedMASExecutor(
+            registry=registry,
+            router=_router(),
+            use_background_threads=False,
+        )
+        return executor, provider
+
+    async def test_build_round_emits_central_mas_artifact_and_real_specialist_messages(
+        self,
+    ) -> None:
+        executor, _provider = await self._build_executor(
+            ["implementation_specialist", "risk_specialist", "product_specialist"]
+        )
+        snapshot = _snapshot()
+        round_data = await executor.build_round(snapshot, round_index=1)
+
+        self.assertEqual(round_data.messages[0].role, "host")
+        self.assertIn("central_mas", round_data.messages[0].artifacts)
+        bundle = round_data.messages[0].artifacts["central_mas"]
+        self.assertEqual(bundle["topology"], "single_supervisor_shared_memory")
+        self.assertEqual(
+            [c["agent"] for c in bundle["assignment_contracts"]],
+            ["implementation_specialist", "risk_specialist", "product_specialist"],
+        )
+        self.assertEqual(
+            [item["role"] for item in bundle["role_catalog"]],
+            ["implementation_specialist", "risk_specialist", "product_specialist"],
+        )
+        self.assertEqual(round_data.messages[1].role, "implementation_specialist")
+        self.assertIn("assignment_contract", round_data.messages[1].artifacts)
+        contract_payload = round_data.messages[1].artifacts["assignment_contract"]
+        self.assertEqual(contract_payload["agent"], "implementation_specialist")
+        self.assertTrue(contract_payload["mission"].strip())
+        self.assertEqual(round_data.synthesis_message.role, "synthesis")
+
+    async def test_supervisor_assignment_changes_when_requirement_changes(self) -> None:
+        executor_a, provider_a = await self._build_executor(
+            ["implementation_specialist", "risk_specialist"]
+        )
+        executor_b, provider_b = await self._build_executor(
+            ["product_specialist", "implementation_specialist"]
+        )
+
+        snapshot_a = _snapshot(
+            requirement="Architecture decision for runtime topology",
+            topic="Architecture",
+        )
+        snapshot_b = _snapshot(
+            requirement="Product positioning for the operator workflow",
+            topic="Product",
+        )
+
+        round_a = await executor_a.build_round(snapshot_a, round_index=1)
+        round_b = await executor_b.build_round(snapshot_b, round_index=1)
+        roles_a = [c["agent"] for c in round_a.messages[0].artifacts["central_mas"]["assignment_contracts"]]
+        roles_b = [c["agent"] for c in round_b.messages[0].artifacts["central_mas"]["assignment_contracts"]]
+        self.assertNotEqual(roles_a, roles_b)
+        # Each supervisor prompt should contain the requirement string verbatim
+        self.assertTrue(any("Architecture decision" in prompt for prompt in provider_a.supervisor_user_prompts))
+        self.assertTrue(any("Product positioning" in prompt for prompt in provider_b.supervisor_user_prompts))
+
+    async def test_convergence_should_end_comes_from_consensus_strategy(self) -> None:
+        executor, _provider = await self._build_executor(
+            ["implementation_specialist", "risk_specialist", "product_specialist"]
+        )
+        snapshot = _snapshot()
+        round_data = await executor.build_round(snapshot, round_index=1)
+        # Synthesis fake returns "follow_up_required" + should_end_meeting=false,
+        # so the executor must report should_end=False — i.e., not gated on a
+        # round counter dressed up as a signal threshold.
+        self.assertFalse(round_data.should_end)
+        self.assertFalse(round_data.consensus_should_end)
+        self.assertEqual(round_data.conclusion_type, "follow_up_required")
+
+    async def test_from_mapping_returns_unavailable_when_provider_env_missing(self) -> None:
+        executor = CentralizedMASExecutor.from_mapping({})
+        self.assertIsInstance(executor, UnavailableRoomExecutor)
+
+
+class BriefPlannerRegressionTests(unittest.TestCase):
+    def test_centralized_requirement_planner_is_removed(self) -> None:
+        import decision_room.orchestration.brief_planner as brief_planner
+
+        self.assertFalse(hasattr(brief_planner, "CentralizedRequirementPlanner"))
+        self.assertFalse(hasattr(brief_planner, "_central_constraints"))
+        self.assertFalse(hasattr(brief_planner, "_central_open_questions"))
+        self.assertFalse(hasattr(brief_planner, "_decision_object"))
+
+    def test_orchestration_init_does_not_export_centralized_planner(self) -> None:
+        import decision_room.orchestration as orch
+
+        self.assertFalse(hasattr(orch, "CentralizedRequirementPlanner"))
+        # New canonical exports:
+        self.assertTrue(hasattr(orch, "LLMSupervisor"))
+        self.assertTrue(hasattr(orch, "SupervisorPlan"))
+        self.assertTrue(hasattr(orch, "AssignmentContract"))
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from decision_room.orchestration import (
-    CentralizedMASExecutor,
     RequirementPlanningService,
     LLMRoomExecutor,
     PreRoomPlanningWorkflow,
@@ -18,6 +17,7 @@ from decision_room.orchestration import (
     RoomExecutor,
     RoomOrchestrator,
     RoomOrchestratorConfig,
+    UnavailableRoomExecutor,
 )
 from decision_room.policies.room_control import (
     RoomControlConfig,
@@ -70,7 +70,11 @@ class RoomRuntime:
             RoomControlConfig(max_rounds=self._config.max_rounds)
         )
         self._orchestrator = RoomOrchestrator(
-            executor or CentralizedMASExecutor(),
+            executor
+            or UnavailableRoomExecutor(
+                "room executor not configured; pass an executor or use build_runtime_from_env "
+                "with DECISION_ROOM_EXECUTOR set"
+            ),
             RoomOrchestratorConfig(
                 message_chunk_delay_sec=self._config.message_chunk_delay_sec,
                 between_turn_delay_sec=self._config.between_turn_delay_sec,
