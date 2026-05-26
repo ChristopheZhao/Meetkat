@@ -38,8 +38,8 @@ from decision_room.providers import ProviderRegistry
 from decision_room.routing.model_router import HybridModelRouter, RouterTargets
 
 from .central_mas import (
-    AssignmentContract,
     LLMSupervisor,
+    SpeakerSlot,
     SupervisorPlan,
     build_supervisor_state,
     central_mas_artifact_bundle,
@@ -162,15 +162,15 @@ class CentralizedMASExecutor:
             route=route,
         )
         host_agenda = supervisor_plan_to_host_agenda(supervisor_plan)
-        runnable = supervisor_plan.runnable_contracts()
+        runnable = supervisor_plan.runnable_speakers()
         if not runnable:
-            raise RuntimeError("supervisor returned no runnable assignment contracts")
-        specialist_pairs = _resolve_contract_specialists(snapshot, runnable)
+            raise RuntimeError("supervisor returned no runnable speaker slots")
+        specialist_pairs = _resolve_speaker_specialists(snapshot, runnable)
         if not specialist_pairs:
             raise RuntimeError(
-                "supervisor assignment contracts did not resolve to any planned specialist"
+                "supervisor speakers did not resolve to any planned specialist"
             )
-        coordination = self._coordination_for_contracts(ctx, specialist_pairs)
+        coordination = self._coordination_for_speakers(ctx, specialist_pairs)
 
         host_message = self._build_supervisor_message(
             snapshot=snapshot,
@@ -179,17 +179,21 @@ class CentralizedMASExecutor:
             next_focus=next_focus,
             route=route,
             plan=supervisor_plan,
-            target_roles=[specialist.role for specialist, _contract in specialist_pairs],
+            target_roles=[specialist.role for specialist, _slot in specialist_pairs],
         )
 
         turn_results: list[SpecialistTurnResult] = []
         target_claim_ref = ""
-        for specialist, contract in specialist_pairs:
+        for specialist, slot in specialist_pairs:
+            # The supervisor only provides an optional ``focus_angle`` hint —
+            # the specialist authors its own claim, evidence, and confidence.
+            # We pass the hint through ``turn_task`` for backward signature
+            # compatibility with the host-led specialist generator.
             output, route_ctx, turn_route = await runner._generate_argument(  # noqa: SLF001
                 route_ctx=route_ctx,
                 route=route,
                 specialist=specialist,
-                turn_task=contract.mission,
+                turn_task=slot.focus_angle,
                 snapshot=snapshot,
                 phase=phase,
                 round_index=round_index,
@@ -201,7 +205,7 @@ class CentralizedMASExecutor:
             turn_results.append(
                 SpecialistTurnResult(
                     specialist=specialist,
-                    task=contract.mission,
+                    task=slot.focus_angle,
                     output=output,
                     route=turn_route,
                 )
@@ -244,7 +248,7 @@ class CentralizedMASExecutor:
 
         messages: list[RoomMessage] = [host_message]
         for turn_index, turn_result in enumerate(turn_results, start=1):
-            contract = runnable[turn_index - 1]
+            slot = runnable[turn_index - 1]
             messages.append(
                 RoomMessage(
                     role=turn_result.specialist.role,
@@ -257,10 +261,10 @@ class CentralizedMASExecutor:
                         "target_claim_ref": turn_result.output.target_claim_ref,
                         "specialist_display_name": turn_result.specialist.display_name,
                         "capability_profile": turn_result.specialist.capability_profile,
-                        "turn_task": turn_result.task,
+                        "focus_angle": turn_result.task,
                         "turn_index": turn_index,
                         "route": _route_artifact(turn_result.route),
-                        "assignment_contract": contract.to_payload(),
+                        "speaker_slot": slot.to_payload(),
                     },
                 )
             )
@@ -312,10 +316,10 @@ class CentralizedMASExecutor:
             synthesis_message=synthesis_message,
         )
 
-    def _coordination_for_contracts(
+    def _coordination_for_speakers(
         self,
         ctx: DecisionContext,
-        specialist_pairs: list[tuple[Any, AssignmentContract]],
+        specialist_pairs: list[tuple[Any, SpeakerSlot]],
     ) -> CoordinationAction:
         coordination = self._coordination.next_action(ctx)
         if coordination.action_type not in {ActionType.HANDOFF, ActionType.SPEAK}:
@@ -349,21 +353,21 @@ class CentralizedMASExecutor:
             round_index=round_index,
             plan=plan,
         )
-        assignment_lines = [
-            f"{contract.agent}: {contract.deliverable}"
-            for contract in plan.runnable_contracts()
+        speaker_lines = [
+            f"{slot.agent}" + (f" — {slot.focus_angle}" if slot.focus_angle else "")
+            for slot in plan.runnable_speakers()
         ]
         text = (
-            f"Supervisor round {round_index} ({phase.value}). "
-            f"Decision focus: {plan.decision_focus or next_focus}. "
-            f"Reason: {plan.reason}. "
-            f"Assignments: {'; '.join(assignment_lines)}"
+            f"主持人本轮 {round_index} 阶段 ({phase.value})。 "
+            f"决策焦点：{plan.decision_focus or next_focus}。 "
+            f"安排理由：{plan.reason}。 "
+            f"发言顺序：{'; '.join(speaker_lines)}"
         )
         if snapshot.last_human_message:
-            text += f"\nHuman input to incorporate: {snapshot.last_human_message}"
+            text += f"\n来自人类的输入：{snapshot.last_human_message}"
         return RoomMessage(
             role="host",
-            title="Supervisor dispatch",
+            title="主持人调度",
             text=text,
             artifacts={
                 "next_focus": next_focus,
@@ -376,9 +380,14 @@ class CentralizedMASExecutor:
                         "constraint_ids": [],
                     }
                 ],
+                "speakers": [
+                    {"role": slot.agent, "focus_angle": slot.focus_angle}
+                    for slot in plan.runnable_speakers()
+                ],
+                # Backward-compat for older readers that look for turns[].
                 "turns": [
-                    {"role": contract.agent, "task": contract.mission}
-                    for contract in plan.runnable_contracts()
+                    {"role": slot.agent, "task": slot.focus_angle}
+                    for slot in plan.runnable_speakers()
                 ],
                 "open_questions": list(plan.open_questions),
                 "route": _route_artifact(route),
@@ -391,14 +400,14 @@ class CentralizedMASExecutor:
         )
 
 
-def _resolve_contract_specialists(
+def _resolve_speaker_specialists(
     snapshot: Any,
-    contracts: list[AssignmentContract],
-) -> list[tuple[Any, AssignmentContract]]:
-    requested_roles = [contract.agent for contract in contracts]
+    speakers: list[SpeakerSlot],
+) -> list[tuple[Any, SpeakerSlot]]:
+    requested_roles = [slot.agent for slot in speakers]
     resolved = resolve_turn_specialists(snapshot, requested_roles)
-    pairs: list[tuple[Any, AssignmentContract]] = []
-    for specialist, contract in zip(resolved, contracts):
-        if specialist.role == contract.agent:
-            pairs.append((specialist, contract))
+    pairs: list[tuple[Any, SpeakerSlot]] = []
+    for specialist, slot in zip(resolved, speakers):
+        if specialist.role == slot.agent:
+            pairs.append((specialist, slot))
     return pairs

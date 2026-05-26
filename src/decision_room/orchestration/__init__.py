@@ -12,9 +12,10 @@ from .brief_planner import (
 )
 from .central_executor import CentralizedMASExecutor
 from .central_mas import (
-    AssignmentContract,
+    AssignmentContract,  # deprecated alias for SpeakerSlot
     CentralAgentRole,
     LLMSupervisor,
+    SpeakerSlot,
     SupervisorPlan,
     SupervisorState,
     build_supervisor_prompts,

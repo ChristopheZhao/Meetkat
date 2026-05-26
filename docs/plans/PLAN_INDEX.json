@@ -249,6 +249,25 @@
       ]
     },
     {
+      "id": "PLAN-20260513-007",
+      "title": "Native-agent autonomy + memory system + Chinese UI",
+      "kind": "feature",
+      "status": "in_progress",
+      "priority": "P1",
+      "owner": "codex",
+      "file_path": "docs/plans/active/PLAN-20260513-007.md",
+      "confirmed_by_user": true,
+      "created_at": "2026-05-27T00:00:00Z",
+      "updated_at": "2026-05-27T00:00:00Z",
+      "archived_at": null,
+      "notes": [
+        {
+          "at": "2026-05-27T00:00:00Z",
+          "text": "Created after deep architecture audit found 3 BLOCKER rule-based leaks: supervisor LLM prescribes per-specialist mission/deliverable/constraints (central_mas.py:167-177), host LLM prescribes specialist turn_task (room_executor.py:876), host agenda hard-locked to exactly 3 focus_points (real_run_contract.py:139-140). User goal: orchestrator stays central for who/when, sub-agents author what; add short+long term memory; Chinese UI + modernized frontend; end-to-end smoke."
+        }
+      ]
+    },
+    {
       "id": "PLAN-20260513-006",
       "title": "Real centralized MAS supervisor refactor",
       "kind": "fix",

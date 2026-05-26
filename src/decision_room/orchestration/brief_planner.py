@@ -335,7 +335,7 @@ def build_requirement_planner_prompts(requirement: str) -> tuple[str, str]:
         "- Produce a concise topic.\n"
         "- Produce a concrete meeting goal.\n"
         "- Extract only real hard constraints from the requirement and invariants.\n"
-        "- If the requirement is underspecified, list up to 3 raw open_questions for downstream agents to surface in-meeting.\n"
+        "- If the requirement is underspecified, list 2-5 raw open_questions for downstream agents to surface in-meeting.\n"
         "- Mirror those (or refine them) into room_start_contract.contextual_open_questions so the room knows what ambiguity to address.\n"
         "- Never emit operator_required_inputs — clarifications are an in-meeting conversation, not a pre-room form.\n"
         "- Produce the first-round current_focus for the host agent.\n\n"
@@ -368,16 +368,16 @@ def parse_requirement_planner_response(requirement: str, raw: str) -> MeetingBri
     room_start_contract = RoomStartContractDraft.from_payload(
         payload.get("room_start_contract", {})
     )
-    if len(open_questions) > 3:
+    if len(open_questions) > 5:
         raise RequirementPlanningError(
-            "open_questions must contain at most 3 items",
+            "open_questions must contain at most 5 items",
             error_code="planner_invalid_schema",
             status_code=502,
             can_fallback=True,
         )
-    if len(room_start_contract.contextual_open_questions) > 3:
+    if len(room_start_contract.contextual_open_questions) > 5:
         raise RequirementPlanningError(
-            "room_start_contract.contextual_open_questions must contain at most 3 items",
+            "room_start_contract.contextual_open_questions must contain at most 5 items",
             error_code="planner_invalid_schema",
             status_code=502,
             can_fallback=True,

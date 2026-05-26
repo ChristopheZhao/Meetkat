@@ -207,7 +207,7 @@ export function RoomPage() {
   const operatorContractSections = readProductOperatorContractSections(snapshot);
   const missingOperatorInputs = readPreflightList(snapshot, "missing_operator_inputs");
   const centralMas = readLatestCentralMasState(snapshot);
-  const assignmentContracts = centralMas?.assignmentContracts ?? [];
+  const speakers = centralMas?.speakers ?? [];
   const centralTopology = centralMas?.topology ?? "";
 
   const humanMessageMutation = useMutation({
@@ -380,19 +380,22 @@ export function RoomPage() {
             </div>
             <p className={styles.secondaryText}>
               {centralTopology
-                ? formatToken(centralTopology)
-                : "Waiting for the supervisor to publish assignment contracts."}
+                ? "中心化主持 · 子智能体自主表达"
+                : "等待主持人发布本轮发言安排…"}
             </p>
-            {assignmentContracts.length > 0 ? (
+            {speakers.length > 0 ? (
               <div className={styles.assignmentList}>
-                {assignmentContracts.map((contract) => (
-                  <article className={styles.assignmentItem} key={contract.agent}>
+                {speakers.map((slot) => (
+                  <article className={styles.assignmentItem} key={slot.agent}>
                     <div className={styles.messageTitleRow}>
-                      <strong>{resolveRoleLabel(contract.agent, roleDirectory)}</strong>
-                      <span className={styles.eventPill}>assigned</span>
+                      <strong>{resolveRoleLabel(slot.agent, roleDirectory)}</strong>
+                      <span className={styles.eventPill}>第 {slot.order} 位</span>
                     </div>
-                    <p className={styles.secondaryText}>{contract.deliverable}</p>
-                    <p className={styles.assignmentMission}>{contract.mission}</p>
+                    <p className={styles.secondaryText}>
+                      {slot.focusAngle
+                        ? `角度提示：${slot.focusAngle}`
+                        : "由该角色契约自主决定内容"}
+                    </p>
                   </article>
                 ))}
               </div>

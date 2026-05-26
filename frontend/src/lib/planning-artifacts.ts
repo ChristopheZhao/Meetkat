@@ -241,10 +241,10 @@ function readStringArray(value: unknown): string[] {
     .filter((item) => item.length > 0);
 }
 
-export type CentralMasAssignmentView = {
+export type CentralMasSpeakerView = {
   agent: string;
-  mission: string;
-  deliverable: string;
+  focusAngle: string;
+  order: number;
 };
 
 export type CentralMasRoleView = {
@@ -258,7 +258,7 @@ export type CentralMasStateView = {
   decisionFocus: string;
   reason: string;
   roleCatalog: CentralMasRoleView[];
-  assignmentContracts: CentralMasAssignmentView[];
+  speakers: CentralMasSpeakerView[];
 };
 
 const CENTRAL_MAS_ARTIFACT_KEY = "central_mas";
@@ -284,8 +284,12 @@ function parseCentralMasPayload(payload: unknown): CentralMasStateView | null {
   if (topology !== "single_supervisor_shared_memory") {
     return null;
   }
-  const assignmentContracts = readAssignmentContracts(obj.assignment_contracts);
-  if (assignmentContracts.length === 0) {
+  // Prefer the new `speakers` shape; fall back to the legacy
+  // `assignment_contracts` key (still populated for one window) so older
+  // server payloads still render.
+  const rawSpeakers = obj.speakers ?? obj.assignment_contracts;
+  const speakers = readSpeakers(rawSpeakers);
+  if (speakers.length === 0) {
     return null;
   }
   const roleCatalog = readRoleCatalog(obj.role_catalog);
@@ -294,15 +298,15 @@ function parseCentralMasPayload(payload: unknown): CentralMasStateView | null {
     decisionFocus: String(obj.decision_focus ?? "").trim(),
     reason: String(obj.reason ?? "").trim(),
     roleCatalog,
-    assignmentContracts,
+    speakers,
   };
 }
 
-function readAssignmentContracts(value: unknown): CentralMasAssignmentView[] {
+function readSpeakers(value: unknown): CentralMasSpeakerView[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.flatMap((item) => {
+  return value.flatMap((item, index) => {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       return [];
     }
@@ -312,11 +316,13 @@ function readAssignmentContracts(value: unknown): CentralMasAssignmentView[] {
     if (!agent || !run) {
       return [];
     }
+    const orderValue = Number(obj.order);
+    const order = Number.isFinite(orderValue) ? orderValue : index;
     return [
       {
         agent,
-        mission: String(obj.mission ?? "").trim(),
-        deliverable: String(obj.deliverable ?? "").trim(),
+        focusAngle: String(obj.focus_angle ?? "").trim(),
+        order,
       },
     ];
   });

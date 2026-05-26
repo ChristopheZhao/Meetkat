@@ -96,35 +96,25 @@ function makeSnapshotWithTranscript(transcript) {
   return snapshot;
 }
 
-test("readLatestCentralMasState gates on supervisor topology and drops unknown fields", () => {
+test("readLatestCentralMasState parses speakers and drops unknown fields", () => {
   const validBundle = {
     topology: "single_supervisor_shared_memory",
     decision_focus: "converge on supervisor direction",
     reason: "supervisor selected specialists",
     role_catalog: [
       { role: "implementation_specialist", display_name: "Implementation Specialist", mission: "feasibility" },
-      { role: "leak_role", display_name: "Should be allowed only because parser does not blacklist roles here", mission: "x" },
+      { role: "leak_role", display_name: "Allowed because parser does not blacklist roles here", mission: "x" },
     ],
-    assignment_contracts: [
+    speakers: [
       {
         agent: "implementation_specialist",
         run: true,
-        mission: "drive feasibility",
-        deliverable: "readout",
+        order: 1,
+        focus_angle: "lean into recovery semantics",
         unknown_field: "should-not-appear",
       },
-      {
-        agent: "",
-        run: true,
-        mission: "missing agent should drop",
-        deliverable: "x",
-      },
-      {
-        agent: "risk_specialist",
-        run: false,
-        mission: "not running this round",
-        deliverable: "x",
-      },
+      { agent: "", run: true, order: 2, focus_angle: "" },
+      { agent: "risk_specialist", run: false, order: 3, focus_angle: "skipped" },
     ],
     supervisor_state: { foo: "bar", unknown: 1 },
     extra_unknown: "ignored",
@@ -154,12 +144,40 @@ test("readLatestCentralMasState gates on supervisor topology and drops unknown f
   assert.equal(state.topology, "single_supervisor_shared_memory");
   assert.equal(state.decisionFocus, "converge on supervisor direction");
   assert.equal(state.reason, "supervisor selected specialists");
-  assert.deepEqual(
-    state.assignmentContracts.map((c) => c.agent),
-    ["implementation_specialist"],
-  );
-  assert.equal("unknown_field" in state.assignmentContracts[0], false);
+  assert.deepEqual(state.speakers.map((s) => s.agent), ["implementation_specialist"]);
+  assert.equal(state.speakers[0].focusAngle, "lean into recovery semantics");
+  // Conductor model: speaker view must NOT carry content-prescription keys.
+  assert.equal("mission" in state.speakers[0], false);
+  assert.equal("deliverable" in state.speakers[0], false);
+  assert.equal("unknown_field" in state.speakers[0], false);
   assert.equal(state.roleCatalog.length, 2);
+});
+
+test("readLatestCentralMasState falls back to legacy assignment_contracts key", () => {
+  const snapshot = makeSnapshotWithTranscript([
+    {
+      event_id: "evt1",
+      seq: 1,
+      role: "host",
+      title: "legacy",
+      text: "legacy",
+      event_type: "agent.message",
+      artifacts: {
+        central_mas: {
+          topology: "single_supervisor_shared_memory",
+          decision_focus: "legacy",
+          reason: "legacy emit",
+          role_catalog: [],
+          assignment_contracts: [
+            { agent: "implementation_specialist", run: true, order: 1, focus_angle: "legacy" },
+          ],
+        },
+      },
+    },
+  ]);
+  const state = readLatestCentralMasState(snapshot);
+  assert.ok(state, "expected legacy bundle to still parse");
+  assert.deepEqual(state.speakers.map((s) => s.agent), ["implementation_specialist"]);
 });
 
 test("readLatestCentralMasState rejects payloads with unknown topology", () => {

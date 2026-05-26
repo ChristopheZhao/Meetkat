@@ -52,17 +52,24 @@ class CentralAgentRole:
 
 
 @dataclass(frozen=True)
-class AssignmentContract:
+class SpeakerSlot:
+    """Supervisor-emitted speaking slot. Carries only orchestration metadata
+    (who speaks, in what order, an optional one-line angle hint). Does NOT
+    prescribe the specialist's claim, evidence, or deliverable — those are
+    authored by the specialist itself.
+    """
+
     agent: str
-    run: bool
-    mission: str
-    deliverable: str
-    constraints: list[str] = field(default_factory=list)
+    run: bool = True
     order: int = 0
-    runtime_hints: dict[str, Any] = field(default_factory=dict)
+    focus_angle: str = ""
 
     def to_payload(self) -> dict[str, Any]:
         return asdict(self)
+
+
+# Backward-compatible alias. New code should import SpeakerSlot.
+AssignmentContract = SpeakerSlot
 
 
 @dataclass(frozen=True)
@@ -72,30 +79,38 @@ class SupervisorState:
     phase: str
     current_focus: str
     memory_projection: dict[str, Any]
-    assignment_contracts: list[AssignmentContract]
+    speakers: list[SpeakerSlot]
     next_node: str
     gate_status: str
 
     def to_payload(self) -> dict[str, Any]:
         payload = asdict(self)
-        payload["assignment_contracts"] = [
-            item.to_payload() for item in self.assignment_contracts
-        ]
+        payload["speakers"] = [item.to_payload() for item in self.speakers]
+        # Keep legacy key for one window so existing readers do not break.
+        payload["assignment_contracts"] = payload["speakers"]
         return payload
 
 
 @dataclass(frozen=True)
 class SupervisorPlan:
     role_catalog: list[CentralAgentRole]
-    assignment_contracts: list[AssignmentContract]
+    speakers: list[SpeakerSlot]
     current_focus: str
     phase: MeetingPhase
     decision_focus: str
     open_questions: list[str]
     reason: str
 
-    def runnable_contracts(self) -> list[AssignmentContract]:
-        return [item for item in self.assignment_contracts if item.run]
+    def runnable_speakers(self) -> list[SpeakerSlot]:
+        return [item for item in self.speakers if item.run]
+
+    # Backward-compat shim — old code may still call this name.
+    def runnable_contracts(self) -> list[SpeakerSlot]:
+        return self.runnable_speakers()
+
+    @property
+    def assignment_contracts(self) -> list[SpeakerSlot]:
+        return self.speakers
 
 
 _STANCE_BY_ROLE = {
@@ -127,10 +142,12 @@ def role_catalog_from_snapshot(snapshot: Any) -> list[CentralAgentRole]:
 def supervisor_plan_to_host_agenda(plan: SupervisorPlan) -> HostAgenda:
     """Adapt a SupervisorPlan to a HostAgenda shape so existing specialist
     and synthesis prompt builders in ``room_executor`` can be reused without
-    duplication. The product / journal still see the richer central_mas
-    artifact bundle on the host message.
+    duplication. The agenda turn's ``task`` carries the optional focus_angle
+    hint (or empty string); specialists are NOT prescribed a task — they
+    decide their own contribution from the role contract + decision_focus +
+    memory recall.
     """
-    runnable = plan.runnable_contracts()
+    runnable = plan.runnable_speakers()
     focus_points = [
         AgendaFocusPoint(
             title=plan.decision_focus or plan.current_focus or "round focus",
@@ -139,8 +156,8 @@ def supervisor_plan_to_host_agenda(plan: SupervisorPlan) -> HostAgenda:
         )
     ]
     turns = [
-        AgendaTurn(role=contract.agent, task=contract.mission)
-        for contract in runnable
+        AgendaTurn(role=slot.agent, task=slot.focus_angle)
+        for slot in runnable
     ]
     return HostAgenda(
         focus_points=focus_points,
@@ -163,16 +180,13 @@ def build_supervisor_prompts(
         "decision_focus": "specific decision being pushed forward in this round",
         "phase": phase.value,
         "open_questions": ["question worth tracking, optional"],
-        "reason": "short rationale for the role selection",
-        "assignment_contracts": [
+        "reason": "short rationale for the speaker selection",
+        "speakers": [
             {
                 "agent": "<role from role_catalog>",
                 "run": True,
-                "mission": "what this specialist should produce for THIS round",
-                "deliverable": "concrete output the specialist returns",
-                "constraints": ["bounded condition the specialist must respect"],
                 "order": 1,
-                "runtime_hints": {"phase": phase.value},
+                "focus_angle": "OPTIONAL one-line angle hint, leave empty if the role contract already implies it",
             }
         ],
     }
@@ -180,22 +194,27 @@ def build_supervisor_prompts(
     state_payload = _supervisor_room_state(snapshot, round_index, phase, next_focus)
     system_prompt = (
         "You are the central supervisor of a multi-agent decision room. "
-        "Your job is to decide which specialist roles should speak in this round "
-        "and to issue one assignment contract per role. "
-        "Stay grounded in the room state and the role catalog. "
-        "Choose 2-4 roles from the catalog only. "
-        "Do not invent roles. Do not invent constraints that are not implied by "
-        "the requirement or the visible state. "
+        "Your job is to orchestrate WHO speaks WHEN, not WHAT they say. "
+        "Each selected specialist is an autonomous LLM agent that will author "
+        "its own claim, evidence, and confidence based on its role contract, "
+        "the room state, its memory recall, and the round's decision_focus. "
+        "Do NOT prescribe a specialist's mission, deliverable, constraints, or "
+        "argument content — the specialist owns that. You only choose roles, "
+        "set their speaking order, and may optionally add a one-line "
+        "`focus_angle` hint when the round needs the role to lean a particular "
+        "way (e.g., 'lean into recovery semantics, not throughput'); leave "
+        "focus_angle empty when the role contract is enough. "
+        "Stay grounded in the room state and the role catalog. Choose 2-4 roles "
+        "from the catalog only. Do not invent roles. "
         "Clarification protocol: if the requirement is materially ambiguous in a "
         "way that would change which specialists belong in this round (e.g., the "
         "target user cohort, the scope boundary, or a key trade-off axis is "
         "unclear), surface the ambiguity to the operator instead of guessing. "
         "Write a concrete one-line question in `decision_focus` prefixed with "
-        "'[Awaiting operator clarification]', explain why in `reason`, and issue "
-        "a minimal assignment contract list (one role is fine) whose mission is to "
-        "frame the choice for the operator. The operator answers via the room "
-        "human-message channel; their reply appears as `last_human_message` in the "
-        "next round and you re-plan with that context. "
+        "'[Awaiting operator clarification]', explain why in `reason`, and emit a "
+        "minimal speaker list. The operator answers via the room human-message "
+        "channel; their reply appears as `last_human_message` in the next round "
+        "and you re-plan with that context. "
         "Return exactly one JSON object and nothing else."
     )
     user_prompt = (
@@ -204,14 +223,16 @@ def build_supervisor_prompts(
         "Role catalog (you may select from these only):\n"
         f"{json.dumps(catalog_payload, ensure_ascii=False, indent=2)}\n\n"
         "Task:\n"
-        f"- Choose 2-4 specialist roles for round {round_index}.\n"
-        "- For each selected role, produce a concrete mission, deliverable, "
-        "constraints list, runtime_hints, and order.\n"
+        f"- Choose 2-4 specialist roles for round {round_index}, ordered by who "
+        "should speak first.\n"
+        "- For each selected role emit `{agent, run, order, focus_angle}` only.\n"
         "- Set run=true for selected roles; omit non-selected roles entirely.\n"
-        "- Each mission must reference the actual room requirement and decision focus.\n"
-        "- Constraints must be specific to THIS round, not generic platitudes.\n"
+        "- Use focus_angle sparingly: only when the round needs the role to lean "
+        "a particular way the role contract does not already imply.\n"
         "- decision_focus must be the single decision being pushed this round.\n"
-        "- Keep open_questions empty unless something visible is missing.\n\n"
+        "- Keep open_questions empty unless something visible is missing.\n"
+        "- You MUST NOT include `mission`, `deliverable`, or `constraints` fields "
+        "anywhere in your output — the specialist agents author those themselves.\n\n"
         "Output schema example (values are placeholders):\n"
         f"{json.dumps(schema, ensure_ascii=False, indent=2)}"
     )
@@ -233,56 +254,43 @@ def parse_supervisor_plan(
         raise ValueError("supervisor response must be a JSON object")
 
     allowed_roles = {item.role for item in role_catalog}
-    raw_contracts = payload.get("assignment_contracts")
-    if not isinstance(raw_contracts, list) or not raw_contracts:
-        raise ValueError("supervisor.assignment_contracts must be a non-empty list")
+    # Accept new ``speakers`` field; for one window also tolerate the legacy
+    # ``assignment_contracts`` key from older supervisor prompts.
+    raw_speakers = payload.get("speakers")
+    if raw_speakers is None:
+        raw_speakers = payload.get("assignment_contracts")
+    if not isinstance(raw_speakers, list) or not raw_speakers:
+        raise ValueError("supervisor.speakers must be a non-empty list")
 
-    contracts: list[AssignmentContract] = []
+    speakers: list[SpeakerSlot] = []
     seen: set[str] = set()
-    for index, item in enumerate(raw_contracts):
+    for index, item in enumerate(raw_speakers):
         if not isinstance(item, dict):
             continue
         agent = str(item.get("agent", "")).strip().lower()
         if not agent or agent not in allowed_roles or agent in seen:
             continue
         run = bool(item.get("run", True))
-        mission = str(item.get("mission", "")).strip()
-        deliverable = str(item.get("deliverable", "")).strip()
-        constraints = [
-            str(value).strip()
-            for value in item.get("constraints", []) or []
-            if str(value).strip()
-        ]
-        runtime_hints_payload = item.get("runtime_hints")
-        runtime_hints = (
-            dict(runtime_hints_payload)
-            if isinstance(runtime_hints_payload, dict)
-            else {}
-        )
+        focus_angle = str(item.get("focus_angle", "")).strip()
         order_value = item.get("order")
         try:
             order = int(order_value) if order_value is not None else index
         except (TypeError, ValueError):
             order = index
-        if not mission or not deliverable:
-            continue
-        contracts.append(
-            AssignmentContract(
+        speakers.append(
+            SpeakerSlot(
                 agent=agent,
                 run=run,
-                mission=mission,
-                deliverable=deliverable,
-                constraints=constraints[:6],
                 order=order,
-                runtime_hints=runtime_hints,
+                focus_angle=focus_angle,
             )
         )
         seen.add(agent)
-    if not contracts:
+    if not speakers:
         raise ValueError(
-            "supervisor.assignment_contracts contained no valid role assignments"
+            "supervisor.speakers contained no valid role selections"
         )
-    contracts.sort(key=lambda contract: contract.order)
+    speakers.sort(key=lambda slot: slot.order)
     current_focus = str(payload.get("current_focus", "")).strip() or fallback_focus
     decision_focus = str(payload.get("decision_focus", "")).strip() or current_focus
     reason = str(payload.get("reason", "")).strip() or (
@@ -296,7 +304,7 @@ def parse_supervisor_plan(
     ][:4]
     return SupervisorPlan(
         role_catalog=list(role_catalog),
-        assignment_contracts=contracts,
+        speakers=speakers,
         current_focus=current_focus,
         phase=phase,
         decision_focus=decision_focus,
@@ -317,8 +325,8 @@ def build_supervisor_state(
         phase=plan.phase.value,
         current_focus=plan.current_focus,
         memory_projection=_memory_projection(snapshot),
-        assignment_contracts=list(plan.assignment_contracts),
-        next_node=plan.assignment_contracts[0].agent if plan.assignment_contracts else "synthesis",
+        speakers=list(plan.speakers),
+        next_node=plan.speakers[0].agent if plan.speakers else "synthesis",
         gate_status="passed",
     )
 
@@ -329,11 +337,15 @@ def central_mas_artifact_bundle(
     plan: SupervisorPlan,
     route: RoutingDecision,
 ) -> dict[str, Any]:
+    speaker_payload = [item.to_payload() for item in plan.speakers]
     return {
         "topology": "single_supervisor_shared_memory",
         "supervisor_state": state.to_payload(),
         "role_catalog": [item.to_payload() for item in plan.role_catalog],
-        "assignment_contracts": [item.to_payload() for item in plan.assignment_contracts],
+        "speakers": speaker_payload,
+        # Keep the legacy frontend-readable key populated with the same shape
+        # so older readers continue to render the supervisor selection.
+        "assignment_contracts": speaker_payload,
         "decision_focus": plan.decision_focus,
         "reason": plan.reason,
         "route": {

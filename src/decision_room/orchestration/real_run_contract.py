@@ -71,7 +71,7 @@ def build_host_prompts(brief: dict) -> tuple[str, str]:
         "turns": [
             {
                 "role": "implementation_specialist",
-                "task": "propose the minimum runtime shape that preserves replay and override visibility",
+                "task": "OPTIONAL one-line focus_angle hint — leave empty if the role contract already implies the angle",
             }
         ],
         "open_questions": ["question if information is missing"],
@@ -79,6 +79,12 @@ def build_host_prompts(brief: dict) -> tuple[str, str]:
     }
     system_prompt = (
         "You are the host agent in a multi-agent product decision room. "
+        "Your job is to orchestrate WHO speaks WHEN, not WHAT they say. Each "
+        "specialist is an autonomous LLM agent that will author its own claim "
+        "and evidence from its role contract. The `task` field on each turn is "
+        "an OPTIONAL one-line angle hint — leave it empty when the role "
+        "contract is enough. Do not prescribe what the specialist should "
+        "argue, claim, or conclude. "
         "You must only use information present in the meeting brief. "
         "Treat meeting_brief.validated_context as authoritative pre-room context. "
         "Do not restate validated_context facts as open_questions, blockers, or missing inputs. "
@@ -91,16 +97,16 @@ def build_host_prompts(brief: dict) -> tuple[str, str]:
         "Meeting brief:\n"
         f"{json.dumps(brief, ensure_ascii=False, indent=2)}\n\n"
         "Task:\n"
-        "- Produce exactly 3 focus_points for the next round.\n"
+        "- Produce 2-5 focus_points for the next round.\n"
         "- Each focus point must reference only constraint_ids from the brief.\n"
-        "- Produce 1-3 turns that decide which candidate specialists should speak this round.\n"
+        "- Produce 1-5 turns that decide which candidate specialists should speak this round.\n"
         "- Each turns.role must be chosen from brief.candidate_specialists.role.\n"
-        "- Each turns.task must be concrete, brief-grounded, and tell that specialist what to answer in this round.\n"
-        "- Order turns to reflect the host-led speaking sequence for this round.\n"
+        "- Each turns.task is an OPTIONAL angle hint (string, may be empty). Use it only when the specialist needs to lean a particular way the role contract does not already imply. Empty string means 'no extra angle, the role contract decides'.\n"
+        "- Order turns to reflect the speaking sequence for this round.\n"
         "- Keep each title concise.\n"
         "- Keep each reason factual and brief-grounded.\n"
         "- Do not emit open_questions for facts already covered by brief.validated_context.\n"
-        "- If information is missing, record up to 3 open_questions.\n"
+        "- If information is missing, record 1-5 open_questions.\n"
         "- Set no_new_constraints=true only if you did not add any hard constraint.\n\n"
         "Output schema example:\n"
         f"{json.dumps(schema, ensure_ascii=False, indent=2)}"
@@ -136,16 +142,16 @@ def parse_host_agenda(
     open_questions_raw = payload.get("open_questions", [])
     no_new_constraints = payload.get("no_new_constraints")
 
-    if not isinstance(focus_points_raw, list) or len(focus_points_raw) != 3:
-        raise ValueError("focus_points must be a list with exactly 3 items")
+    if not isinstance(focus_points_raw, list) or not (2 <= len(focus_points_raw) <= 5):
+        raise ValueError("focus_points must be a list with 2-5 items")
     if not isinstance(turns_raw, list) or not turns_raw:
         raise ValueError("turns must be a non-empty list")
-    if len(turns_raw) > 3:
-        raise ValueError("turns must contain at most 3 items")
+    if len(turns_raw) > 5:
+        raise ValueError("turns must contain at most 5 items")
     if not isinstance(open_questions_raw, list):
         raise ValueError("open_questions must be a list")
-    if len(open_questions_raw) > 3:
-        raise ValueError("open_questions must contain at most 3 items")
+    if len(open_questions_raw) > 5:
+        raise ValueError("open_questions must contain at most 5 items")
     if no_new_constraints is not True:
         raise ValueError("no_new_constraints must be true")
 
@@ -200,9 +206,16 @@ def parse_host_agenda(
             raise ValueError(f"turns[{idx}] references unknown specialist role: {role}")
         if normalized_role in seen_roles:
             raise ValueError(f"turns[{idx}].role duplicates an earlier specialist role")
-        if not isinstance(task, str) or not task.strip():
-            raise ValueError(f"turns[{idx}].task must be non-empty")
-        turns.append(AgendaTurn(role=normalized_role, task=task.strip()))
+        # Task is an OPTIONAL focus_angle hint in the conductor model; an
+        # empty string is valid and means "no extra angle — role contract
+        # is enough for the specialist to author its own contribution".
+        if task is None:
+            normalized_task = ""
+        elif isinstance(task, str):
+            normalized_task = task.strip()
+        else:
+            raise ValueError(f"turns[{idx}].task must be a string if provided")
+        turns.append(AgendaTurn(role=normalized_role, task=normalized_task))
         seen_roles.add(normalized_role)
 
     open_questions: list[str] = []

@@ -3,8 +3,8 @@ import unittest
 
 from decision_room.orchestration.central_executor import CentralizedMASExecutor
 from decision_room.orchestration.central_mas import (
-    AssignmentContract,
     LLMSupervisor,
+    SpeakerSlot,
     parse_supervisor_plan,
     role_catalog_from_snapshot,
 )
@@ -92,18 +92,14 @@ def _supervisor_payload(
     requirement_hint: str,
     selected_roles: list[str],
 ) -> str:
-    contracts = [
+    speakers = [
         {
             "agent": role,
             "run": True,
-            "mission": (
-                f"For requirement '{requirement_hint[:40]}', drive the {role} contribution "
-                "into a concrete recommendation."
-            ),
-            "deliverable": f"{role} readout",
-            "constraints": ["respond only with grounded evidence"],
             "order": index + 1,
-            "runtime_hints": {"phase": "explore"},
+            # The supervisor MAY emit a focus_angle hint, but never a mission /
+            # deliverable / constraints. Tests use focus_angle when present.
+            "focus_angle": "" if index % 2 else f"lean into the {role} angle for this round",
         }
         for index, role in enumerate(selected_roles)
     ]
@@ -114,7 +110,7 @@ def _supervisor_payload(
             "phase": "explore",
             "reason": "supervisor selected specialists relevant to this round",
             "open_questions": [],
-            "assignment_contracts": contracts,
+            "speakers": speakers,
         }
     )
 
@@ -205,21 +201,9 @@ class ParseSupervisorPlanTests(unittest.TestCase):
                 "phase": "explore",
                 "reason": "test",
                 "open_questions": [],
-                "assignment_contracts": [
-                    {
-                        "agent": "implementation_specialist",
-                        "run": True,
-                        "mission": "do feasibility",
-                        "deliverable": "readout",
-                        "order": 1,
-                    },
-                    {
-                        "agent": "rogue_role",
-                        "run": True,
-                        "mission": "rogue",
-                        "deliverable": "rogue",
-                        "order": 2,
-                    },
+                "speakers": [
+                    {"agent": "implementation_specialist", "run": True, "order": 1, "focus_angle": ""},
+                    {"agent": "rogue_role", "run": True, "order": 2, "focus_angle": ""},
                 ],
             }
         )
@@ -229,19 +213,19 @@ class ParseSupervisorPlanTests(unittest.TestCase):
             phase=MeetingPhase.EXPLORE,
             fallback_focus="fallback",
         )
-        self.assertEqual([c.agent for c in plan.assignment_contracts], ["implementation_specialist"])
+        self.assertEqual([s.agent for s in plan.speakers], ["implementation_specialist"])
 
-    def test_parse_drops_contracts_missing_mission_or_deliverable(self) -> None:
+    def test_parse_drops_duplicate_speaker_entries(self) -> None:
         snapshot = _snapshot()
         catalog = role_catalog_from_snapshot(snapshot)
         payload = json.dumps(
             {
                 "current_focus": "",
                 "phase": "explore",
-                "assignment_contracts": [
-                    {"agent": "implementation_specialist", "mission": "", "deliverable": "x"},
-                    {"agent": "risk_specialist", "mission": "do risk", "deliverable": ""},
-                    {"agent": "product_specialist", "mission": "real", "deliverable": "real"},
+                "speakers": [
+                    {"agent": "implementation_specialist", "order": 1, "focus_angle": ""},
+                    {"agent": "implementation_specialist", "order": 2, "focus_angle": "duplicate"},
+                    {"agent": "product_specialist", "order": 3, "focus_angle": ""},
                 ],
             }
         )
@@ -251,12 +235,37 @@ class ParseSupervisorPlanTests(unittest.TestCase):
             phase=MeetingPhase.EXPLORE,
             fallback_focus="fallback",
         )
-        self.assertEqual([c.agent for c in plan.assignment_contracts], ["product_specialist"])
+        self.assertEqual(
+            [s.agent for s in plan.speakers],
+            ["implementation_specialist", "product_specialist"],
+        )
 
-    def test_parse_raises_on_empty_contract_list(self) -> None:
+    def test_parse_accepts_legacy_assignment_contracts_key(self) -> None:
+        """One-window backward compatibility: older supervisor prompts may still
+        emit the legacy ``assignment_contracts`` field name; parser tolerates
+        it but treats each entry as a speaker slot (focus_angle only)."""
         snapshot = _snapshot()
         catalog = role_catalog_from_snapshot(snapshot)
-        payload = json.dumps({"assignment_contracts": []})
+        payload = json.dumps(
+            {
+                "phase": "explore",
+                "assignment_contracts": [
+                    {"agent": "implementation_specialist", "order": 1, "focus_angle": "legacy"},
+                ],
+            }
+        )
+        plan = parse_supervisor_plan(
+            payload,
+            role_catalog=catalog,
+            phase=MeetingPhase.EXPLORE,
+            fallback_focus="fallback",
+        )
+        self.assertEqual([s.agent for s in plan.speakers], ["implementation_specialist"])
+
+    def test_parse_raises_on_empty_speakers_list(self) -> None:
+        snapshot = _snapshot()
+        catalog = role_catalog_from_snapshot(snapshot)
+        payload = json.dumps({"speakers": []})
         with self.assertRaises(ValueError):
             parse_supervisor_plan(
                 payload,
@@ -292,13 +301,14 @@ class LLMSupervisorTests(unittest.IsolatedAsyncioTestCase):
             route=route,
         )
         self.assertEqual(
-            [c.agent for c in plan.assignment_contracts],
+            [s.agent for s in plan.speakers],
             ["implementation_specialist", "risk_specialist", "product_specialist"],
         )
-        for contract in plan.assignment_contracts:
-            self.assertTrue(contract.mission.strip())
-            self.assertTrue(contract.deliverable.strip())
-            self.assertTrue(contract.run)
+        for slot in plan.speakers:
+            self.assertIsInstance(slot, SpeakerSlot)
+            self.assertTrue(slot.run)
+            # focus_angle is optional — may be empty by design.
+            self.assertIsInstance(slot.focus_angle, str)
         self.assertTrue(plan.decision_focus.strip())
 
 
@@ -330,18 +340,27 @@ class CentralizedMASExecutorTests(unittest.IsolatedAsyncioTestCase):
         bundle = round_data.messages[0].artifacts["central_mas"]
         self.assertEqual(bundle["topology"], "single_supervisor_shared_memory")
         self.assertEqual(
-            [c["agent"] for c in bundle["assignment_contracts"]],
+            [s["agent"] for s in bundle["speakers"]],
             ["implementation_specialist", "risk_specialist", "product_specialist"],
         )
+        # Backward-compat legacy key still populated with same shape.
+        self.assertEqual(bundle["assignment_contracts"], bundle["speakers"])
         self.assertEqual(
             [item["role"] for item in bundle["role_catalog"]],
             ["implementation_specialist", "risk_specialist", "product_specialist"],
         )
+        # Crucially: speaker payload contains NO content fields. Supervisor
+        # only orders; specialists author content.
+        for speaker in bundle["speakers"]:
+            self.assertNotIn("mission", speaker)
+            self.assertNotIn("deliverable", speaker)
+            self.assertNotIn("constraints", speaker)
         self.assertEqual(round_data.messages[1].role, "implementation_specialist")
-        self.assertIn("assignment_contract", round_data.messages[1].artifacts)
-        contract_payload = round_data.messages[1].artifacts["assignment_contract"]
-        self.assertEqual(contract_payload["agent"], "implementation_specialist")
-        self.assertTrue(contract_payload["mission"].strip())
+        self.assertIn("speaker_slot", round_data.messages[1].artifacts)
+        slot_payload = round_data.messages[1].artifacts["speaker_slot"]
+        self.assertEqual(slot_payload["agent"], "implementation_specialist")
+        # focus_angle is optional — may be empty string.
+        self.assertIn("focus_angle", slot_payload)
         self.assertEqual(round_data.synthesis_message.role, "synthesis")
 
     async def test_supervisor_assignment_changes_when_requirement_changes(self) -> None:
@@ -363,8 +382,8 @@ class CentralizedMASExecutorTests(unittest.IsolatedAsyncioTestCase):
 
         round_a = await executor_a.build_round(snapshot_a, round_index=1)
         round_b = await executor_b.build_round(snapshot_b, round_index=1)
-        roles_a = [c["agent"] for c in round_a.messages[0].artifacts["central_mas"]["assignment_contracts"]]
-        roles_b = [c["agent"] for c in round_b.messages[0].artifacts["central_mas"]["assignment_contracts"]]
+        roles_a = [s["agent"] for s in round_a.messages[0].artifacts["central_mas"]["speakers"]]
+        roles_b = [s["agent"] for s in round_b.messages[0].artifacts["central_mas"]["speakers"]]
         self.assertNotEqual(roles_a, roles_b)
         # Each supervisor prompt should contain the requirement string verbatim
         self.assertTrue(any("Architecture decision" in prompt for prompt in provider_a.supervisor_user_prompts))
@@ -466,6 +485,81 @@ class NativeAgentClarificationContractTests(unittest.TestCase):
         self.assertIn("[Awaiting operator clarification]", system_prompt)
         self.assertIn("human-message channel", system_prompt)
         self.assertIn("last_human_message", system_prompt)
+
+    def test_supervisor_prompt_does_not_prescribe_specialist_content(self) -> None:
+        """Conductor model: supervisor MUST NOT ask the LLM to fill per-specialist
+        mission/deliverable/constraints. Those are the specialist's authorship."""
+        from decision_room.mas.types import MeetingPhase
+        from decision_room.orchestration.central_mas import (
+            build_supervisor_prompts,
+            role_catalog_from_snapshot,
+        )
+
+        snapshot = _snapshot()
+        system_prompt, user_prompt = build_supervisor_prompts(
+            snapshot=snapshot,
+            round_index=1,
+            role_catalog=role_catalog_from_snapshot(snapshot),
+            phase=MeetingPhase.EXPLORE,
+            next_focus="kick off",
+        )
+        combined = system_prompt + "\n" + user_prompt
+        # Schema example must NOT contain content-prescription slots as fillable
+        # keys. (The prose may negate them — that's fine.)
+        self.assertNotIn('"mission"', user_prompt.split("Output schema example")[-1])
+        self.assertNotIn('"deliverable"', user_prompt.split("Output schema example")[-1])
+        self.assertNotIn('"constraints"', user_prompt.split("Output schema example")[-1])
+        # Prose must explicitly forbid content prescription.
+        self.assertIn("WHO speaks WHEN, not WHAT they say", system_prompt)
+        self.assertIn(
+            "MUST NOT include `mission`, `deliverable`, or `constraints`",
+            user_prompt,
+        )
+        # New positive contract: speaker shape only.
+        self.assertIn('"speakers"', user_prompt)
+        self.assertIn('"focus_angle"', user_prompt)
+
+    def test_specialist_prompt_does_not_prescribe_turn_task(self) -> None:
+        """Conductor model: specialist prompt MUST NOT carry the host's old
+        'Execute this host-assigned turn task' clause. The specialist is the
+        author."""
+        from decision_room.mas.types import MeetingPhase, ModelTarget, ModelTier, RoutingDecision
+        from decision_room.orchestration.pre_room_planning import CandidateSpecialist
+        from decision_room.orchestration.real_run_contract import HostAgenda
+        from decision_room.orchestration.room_executor import _build_argument_prompts
+
+        specialist = CandidateSpecialist(
+            role="implementation_specialist",
+            display_name="Implementation Specialist",
+            capability_profile="Evaluates feasibility.",
+            prompt_contract="Stay concrete.",
+            join_reason="Need engineering judgment.",
+        )
+        route = RoutingDecision(
+            tier=ModelTier.DEFAULT,
+            target=ModelTarget(supplier="qwen", model="test"),
+            reason="test",
+        )
+        system_prompt, user_prompt = _build_argument_prompts(
+            specialist=specialist,
+            turn_task="",
+            snapshot=_snapshot(),
+            phase=MeetingPhase.EXPLORE,
+            round_index=1,
+            next_focus="kick off",
+            host_agenda=HostAgenda(
+                focus_points=[],
+                turns=[],
+                open_questions=[],
+                no_new_constraints=True,
+            ),
+            target_claim_ref="",
+            route=route,
+        )
+        combined = system_prompt + "\n" + user_prompt
+        self.assertNotIn("Execute this host-assigned turn task", combined)
+        self.assertIn("author of this round's contribution", user_prompt)
+        self.assertIn("autonomous specialist agent", system_prompt)
 
     def test_specialist_prompt_grants_clarification_license(self) -> None:
         from decision_room.mas.types import MeetingPhase, ModelTarget, ModelTier, RoutingDecision
