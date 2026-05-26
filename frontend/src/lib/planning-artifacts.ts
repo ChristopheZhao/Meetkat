@@ -240,3 +240,107 @@ function readStringArray(value: unknown): string[] {
     .map((item) => String(item).trim())
     .filter((item) => item.length > 0);
 }
+
+export type CentralMasAssignmentView = {
+  agent: string;
+  mission: string;
+  deliverable: string;
+};
+
+export type CentralMasRoleView = {
+  role: string;
+  displayName: string;
+  mission: string;
+};
+
+export type CentralMasStateView = {
+  topology: string;
+  decisionFocus: string;
+  reason: string;
+  roleCatalog: CentralMasRoleView[];
+  assignmentContracts: CentralMasAssignmentView[];
+};
+
+const CENTRAL_MAS_ARTIFACT_KEY = "central_mas";
+
+export function readLatestCentralMasState(
+  snapshot: RoomSnapshot,
+): CentralMasStateView | null {
+  for (const entry of [...snapshot.transcript].reverse()) {
+    const view = parseCentralMasPayload(entry.artifacts[CENTRAL_MAS_ARTIFACT_KEY]);
+    if (view) {
+      return view;
+    }
+  }
+  return null;
+}
+
+function parseCentralMasPayload(payload: unknown): CentralMasStateView | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const obj = payload as PlanningObject;
+  const topology = String(obj.topology ?? "").trim();
+  if (topology !== "single_supervisor_shared_memory") {
+    return null;
+  }
+  const assignmentContracts = readAssignmentContracts(obj.assignment_contracts);
+  if (assignmentContracts.length === 0) {
+    return null;
+  }
+  const roleCatalog = readRoleCatalog(obj.role_catalog);
+  return {
+    topology,
+    decisionFocus: String(obj.decision_focus ?? "").trim(),
+    reason: String(obj.reason ?? "").trim(),
+    roleCatalog,
+    assignmentContracts,
+  };
+}
+
+function readAssignmentContracts(value: unknown): CentralMasAssignmentView[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return [];
+    }
+    const obj = item as PlanningObject;
+    const agent = String(obj.agent ?? "").trim();
+    const run = obj.run !== false;
+    if (!agent || !run) {
+      return [];
+    }
+    return [
+      {
+        agent,
+        mission: String(obj.mission ?? "").trim(),
+        deliverable: String(obj.deliverable ?? "").trim(),
+      },
+    ];
+  });
+}
+
+function readRoleCatalog(value: unknown): CentralMasRoleView[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return [];
+    }
+    const obj = item as PlanningObject;
+    const role = String(obj.role ?? "").trim();
+    if (!role) {
+      return [];
+    }
+    return [
+      {
+        role,
+        displayName: String(obj.display_name ?? formatToken(role)).trim(),
+        mission: String(obj.mission ?? "").trim(),
+      },
+    ];
+  });
+}

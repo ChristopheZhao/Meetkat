@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  readLatestCentralMasState,
   readProductOperatorContractSections,
   readProductOperatorContractSectionsFromContext,
 } from "../.contract-dist/lib/planning-artifacts.js";
@@ -87,4 +88,113 @@ test("product operator contract sections exclude validation-specific acceptance 
     false,
   );
   assert.deepEqual(preflightSections, sections);
+});
+
+function makeSnapshotWithTranscript(transcript) {
+  const snapshot = makeSnapshot();
+  snapshot.transcript = transcript;
+  return snapshot;
+}
+
+test("readLatestCentralMasState gates on supervisor topology and drops unknown fields", () => {
+  const validBundle = {
+    topology: "single_supervisor_shared_memory",
+    decision_focus: "converge on supervisor direction",
+    reason: "supervisor selected specialists",
+    role_catalog: [
+      { role: "implementation_specialist", display_name: "Implementation Specialist", mission: "feasibility" },
+      { role: "leak_role", display_name: "Should be allowed only because parser does not blacklist roles here", mission: "x" },
+    ],
+    assignment_contracts: [
+      {
+        agent: "implementation_specialist",
+        run: true,
+        mission: "drive feasibility",
+        deliverable: "readout",
+        unknown_field: "should-not-appear",
+      },
+      {
+        agent: "",
+        run: true,
+        mission: "missing agent should drop",
+        deliverable: "x",
+      },
+      {
+        agent: "risk_specialist",
+        run: false,
+        mission: "not running this round",
+        deliverable: "x",
+      },
+    ],
+    supervisor_state: { foo: "bar", unknown: 1 },
+    extra_unknown: "ignored",
+  };
+  const snapshot = makeSnapshotWithTranscript([
+    {
+      event_id: "evt1",
+      seq: 1,
+      role: "host",
+      title: "older",
+      text: "older",
+      event_type: "agent.message",
+      artifacts: { central_mas: { topology: "free_discussion" } },
+    },
+    {
+      event_id: "evt2",
+      seq: 2,
+      role: "host",
+      title: "latest",
+      text: "latest",
+      event_type: "agent.message",
+      artifacts: { central_mas: validBundle },
+    },
+  ]);
+  const state = readLatestCentralMasState(snapshot);
+  assert.ok(state, "expected a parsed CentralMasStateView");
+  assert.equal(state.topology, "single_supervisor_shared_memory");
+  assert.equal(state.decisionFocus, "converge on supervisor direction");
+  assert.equal(state.reason, "supervisor selected specialists");
+  assert.deepEqual(
+    state.assignmentContracts.map((c) => c.agent),
+    ["implementation_specialist"],
+  );
+  assert.equal("unknown_field" in state.assignmentContracts[0], false);
+  assert.equal(state.roleCatalog.length, 2);
+});
+
+test("readLatestCentralMasState rejects payloads with unknown topology", () => {
+  const snapshot = makeSnapshotWithTranscript([
+    {
+      event_id: "evt1",
+      seq: 1,
+      role: "host",
+      title: "rogue",
+      text: "rogue",
+      event_type: "agent.message",
+      artifacts: {
+        central_mas: {
+          topology: "validation_acceptance_panel",
+          assignment_contracts: [
+            { agent: "implementation_specialist", run: true, mission: "x", deliverable: "x" },
+          ],
+        },
+      },
+    },
+  ]);
+  assert.equal(readLatestCentralMasState(snapshot), null);
+});
+
+test("readLatestCentralMasState returns null when no valid supervisor artifact exists", () => {
+  const snapshot = makeSnapshotWithTranscript([
+    {
+      event_id: "evt1",
+      seq: 1,
+      role: "host",
+      title: "no bundle",
+      text: "no bundle",
+      event_type: "agent.message",
+      artifacts: {},
+    },
+  ]);
+  assert.equal(readLatestCentralMasState(snapshot), null);
 });

@@ -23,6 +23,7 @@ import systemsArchitectAvatar from "../assets/agents/systems-architect.webp";
 import {
   buildRoleDirectory,
   formatToken,
+  readLatestCentralMasState,
   readProductOperatorContractSections,
   readOperatorContextValue,
   readPlanningText,
@@ -168,36 +169,6 @@ function RoleAvatar({
   );
 }
 
-function readLatestCentralMas(snapshot: RoomSnapshot): Record<string, unknown> | null {
-  for (const entry of [...snapshot.transcript].reverse()) {
-    const payload = entry.artifacts.central_mas;
-    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-      return payload as Record<string, unknown>;
-    }
-  }
-  return null;
-}
-
-function readAssignmentContracts(centralMas: Record<string, unknown> | null) {
-  const raw = centralMas?.assignment_contracts;
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw.flatMap((item) => {
-    if (!item || typeof item !== "object") {
-      return [];
-    }
-    const payload = item as Record<string, unknown>;
-    const agent = String(payload.agent ?? "").trim();
-    const mission = String(payload.mission ?? "").trim();
-    const deliverable = String(payload.deliverable ?? "").trim();
-    if (!agent) {
-      return [];
-    }
-    return [{ agent, mission, deliverable }];
-  });
-}
-
 export function RoomPage() {
   const initialSnapshot = useLoaderData() as RoomSnapshot;
   const { snapshot, connectionState } = useRoomSession(initialSnapshot);
@@ -235,9 +206,9 @@ export function RoomPage() {
   const executorTargets = readRuntimeExecutorTargets(snapshot);
   const operatorContractSections = readProductOperatorContractSections(snapshot);
   const missingOperatorInputs = readPreflightList(snapshot, "missing_operator_inputs");
-  const centralMas = readLatestCentralMas(snapshot);
-  const assignmentContracts = readAssignmentContracts(centralMas);
-  const centralTopology = String(centralMas?.topology ?? "").trim();
+  const centralMas = readLatestCentralMasState(snapshot);
+  const assignmentContracts = centralMas?.assignmentContracts ?? [];
+  const centralTopology = centralMas?.topology ?? "";
 
   const humanMessageMutation = useMutation({
     mutationFn: (text: string) => postHumanMessage(snapshot.room_id, text),
