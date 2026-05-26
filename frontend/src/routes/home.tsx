@@ -91,22 +91,6 @@ function formatExecutorTargets(readiness: RuntimeReadiness): string {
     .join(" · ");
 }
 
-function composeRequirementWithClarifications(
-  requirement: string,
-  clarifications: Record<string, string>,
-): string {
-  const entries = Object.entries(clarifications)
-    .map(([question, answer]) => [question.trim(), answer.trim()] as const)
-    .filter(([question, answer]) => question && answer);
-  if (entries.length === 0) {
-    return requirement;
-  }
-  const block = entries
-    .map(([question, answer]) => `- ${question}: ${answer}`)
-    .join("\n");
-  return `${requirement.trim()}\n\n[Operator clarifications]\n${block}`;
-}
-
 export function HomePage() {
   const initialRooms = useLoaderData() as RoomSummary[];
   const navigate = useNavigate();
@@ -117,7 +101,6 @@ export function HomePage() {
   const [preflightReport, setPreflightReport] = useState<RoomPreflightReport | null>(
     null,
   );
-  const [clarifications, setClarifications] = useState<Record<string, string>>({});
 
   const roomsQuery = useQuery({
     queryKey: ["rooms"],
@@ -144,21 +127,16 @@ export function HomePage() {
   const handleRequirementChange = (nextRequirement: string) => {
     setRequirement(nextRequirement);
     setPreflightReport(null);
-    setClarifications({});
     preflightMutation.reset();
     createMutation.reset();
   };
 
-  const handleClarificationChange = (question: string, answer: string) => {
-    setClarifications((prev) => ({ ...prev, [question]: answer }));
-  };
-
-  const handleCheckPreflight = async () => {
+  const handlePreviewBrief = async () => {
     createMutation.reset();
     preflightMutation.reset();
     try {
       await preflightMutation.mutateAsync({
-        requirement: composeRequirementWithClarifications(requirement, clarifications),
+        requirement,
         allow_planner_fallback: false,
         entry_scope: HOME_ENTRY_SCOPE,
       });
@@ -168,15 +146,14 @@ export function HomePage() {
   };
 
   const handleCreateRoom = async (event: FormEvent<HTMLFormElement>) => {
-    // Primary "Open room" path: never silently aborts. Preflight findings (if
-    // any) flow into the room as contextual context rather than blocking the
-    // operator before any agent has spoken. Operator clarifications, when
-    // present, are appended to the requirement so the planner sees them.
+    // Open Room always opens. Clarifications happen inside the meeting via
+    // the supervisor / specialist agents asking the operator naturally
+    // through the room human-message channel — not as pre-room slot filling.
     event.preventDefault();
     createMutation.reset();
     try {
       await createMutation.mutateAsync({
-        requirement: composeRequirementWithClarifications(requirement, clarifications),
+        requirement,
         mode: "agent_first",
         require_preflight_ready: false,
         allow_planner_fallback: true,
@@ -236,30 +213,27 @@ export function HomePage() {
             />
           </label>
           <p className={styles.helper}>
-            Open room creates the meeting immediately and lets the agents
-            discuss unresolved questions in-room. Check room start runs the
-            preflight planner first and lets you fill missing operator inputs
-            before the agents speak.
+            Open room creates the meeting immediately. The supervisor and
+            specialist agents will ask you clarifying questions through the
+            room's human-message channel whenever they need more from you —
+            no separate pre-room form. Preview brief is optional and only
+            shows what the planner thinks before you commit.
           </p>
           <div className={styles.buttonRow}>
             <button
               className={styles.secondaryButton}
               type="button"
-              onClick={() => void handleCheckPreflight()}
+              onClick={() => void handlePreviewBrief()}
               disabled={isSubmitting}
             >
-              {preflightMutation.isPending ? "Checking room start..." : "Check room start"}
+              {preflightMutation.isPending ? "Previewing brief..." : "Preview brief"}
             </button>
             <button
               className={styles.primaryButton}
               type="submit"
               disabled={isSubmitting}
             >
-              {preflightMutation.isPending
-                  ? "Checking room start..."
-                  : createMutation.isPending
-                    ? "Creating room..."
-                    : "Open room"}
+              {createMutation.isPending ? "Creating room..." : "Open room"}
             </button>
           </div>
           {activeError ? (
@@ -271,19 +245,12 @@ export function HomePage() {
             <section className={styles.preflightPanel}>
                 <div className={styles.preflightHeader}>
                   <div>
-                  <p className={styles.preflightKicker}>Room-start contract</p>
-                  <h4>Room start gate</h4>
+                  <p className={styles.preflightKicker}>Brief preview</p>
+                  <h4>What the planner sees</h4>
                   </div>
-                <span
-                  className={
-                    roomStartContract?.room_start_ready
-                      ? styles.preflightReady
-                      : styles.preflightBlocked
-                  }
-                >
-                  {roomStartContract?.room_start_ready
-                    ? "Ready to open"
-                    : "Blocked before room start"}
+                <span className={styles.preflightReady}>
+                  Preview only · Open room ignores any planner concerns and
+                  lets the agents ask you in-meeting
                 </span>
               </div>
               <p className={styles.preflightSummary}>
@@ -339,42 +306,6 @@ export function HomePage() {
                   </ul>
                 </div>
               ))}
-              {roomStartContract && roomStartContract.missing_operator_inputs.length > 0 ? (
-                <div className={styles.clarificationBlock}>
-                  <p className={styles.listTitle}>
-                    Missing operator inputs — answer here to re-check, or open
-                    the room anyway and let the agents treat them as open
-                    questions
-                  </p>
-                  <div className={styles.clarificationList}>
-                    {roomStartContract.missing_operator_inputs.map((item) => (
-                      <label className={styles.clarificationItem} key={item}>
-                        <span>{item}</span>
-                        <textarea
-                          rows={2}
-                          value={clarifications[item] ?? ""}
-                          onChange={(event) =>
-                            handleClarificationChange(item, event.target.value)
-                          }
-                          placeholder="Optional: provide the answer to lift this blocker before room start."
-                        />
-                      </label>
-                    ))}
-                  </div>
-                  <div className={styles.clarificationActions}>
-                    <button
-                      type="button"
-                      className={styles.secondaryButton}
-                      onClick={() => void handleCheckPreflight()}
-                      disabled={isSubmitting}
-                    >
-                      {preflightMutation.isPending
-                        ? "Re-checking..."
-                        : "Save clarifications and re-check"}
-                    </button>
-                  </div>
-                </div>
-              ) : null}
               <div className={styles.preflightLists}>
                 <div>
                   <p className={styles.listTitle}>System blockers</p>

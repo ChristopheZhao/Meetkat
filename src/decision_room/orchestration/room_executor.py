@@ -850,6 +850,17 @@ def _build_argument_prompts(
         "Stay grounded in the room brief, recent agenda, and visible blackboard state. "
         "Treat room_state.validated_context as already resolved input rather than an open question surface. "
         "Do not invent constraints or hidden requirements. "
+        "Clarification protocol: if your turn task has a material ambiguity that "
+        "would meaningfully change your claim (a missing definition, an unstated "
+        "scope boundary, a needed assumption you have no basis for), do not "
+        "fabricate. Ask the operator one focused clarifying question in your "
+        "`text` field, set `claim` to start with '[Awaiting operator clarification]' "
+        "followed by the same one-line question, set `confidence` to 0.30 or "
+        "lower, and provide your best partial reasoning in `evidence`. The "
+        "operator answers via the room human-message channel and the answer "
+        "appears as `room_state.last_human_message` next round so you can "
+        "complete the analysis. Use this protocol sparingly — only when guessing "
+        "would distort the decision record. "
         "Return exactly one JSON object and nothing else."
     )
     user_prompt = (

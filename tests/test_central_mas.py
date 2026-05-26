@@ -407,5 +407,105 @@ class BriefPlannerRegressionTests(unittest.TestCase):
         self.assertTrue(hasattr(orch, "AssignmentContract"))
 
 
+class NativeAgentClarificationContractTests(unittest.TestCase):
+    """Lock in the architecture decision: clarification is in-meeting agent
+    dialogue, not a pre-room slot-filling form. These tests guard against
+    the deprecated preflight-gate UX silently coming back."""
+
+    def test_planner_prompt_forbids_operator_required_inputs(self) -> None:
+        from decision_room.orchestration.brief_planner import (
+            build_requirement_planner_prompts,
+        )
+
+        system_prompt, user_prompt = build_requirement_planner_prompts(
+            "Should we adopt event-sourcing?"
+        )
+        combined = system_prompt + "\n" + user_prompt
+        # Schema example must not include the deprecated slot-filling key.
+        self.assertNotIn(
+            '"operator_required_inputs"',
+            user_prompt,
+            "operator_required_inputs must not appear as a JSON schema key the planner is asked to fill",
+        )
+        # Prose must explicitly forbid it and explain the in-meeting alternative.
+        self.assertIn("Never emit operator_required_inputs", user_prompt)
+        self.assertIn("conversation-first", system_prompt)
+        self.assertIn("human-message channel", system_prompt)
+
+    def test_room_start_contract_draft_discards_operator_required_inputs(self) -> None:
+        from decision_room.orchestration.brief_planner import RoomStartContractDraft
+
+        draft = RoomStartContractDraft.from_payload(
+            {
+                "operator_required_inputs": [
+                    "Define the target cohort",
+                    "Specify the budget",
+                ],
+                "contextual_open_questions": ["What is the success metric?"],
+            }
+        )
+        self.assertEqual(draft.operator_required_inputs, [])
+        self.assertEqual(draft.contextual_open_questions, ["What is the success metric?"])
+
+    def test_supervisor_prompt_grants_clarification_license(self) -> None:
+        from decision_room.mas.types import MeetingPhase
+        from decision_room.orchestration.central_mas import (
+            build_supervisor_prompts,
+            role_catalog_from_snapshot,
+        )
+
+        snapshot = _snapshot()
+        system_prompt, _user_prompt = build_supervisor_prompts(
+            snapshot=snapshot,
+            round_index=1,
+            role_catalog=role_catalog_from_snapshot(snapshot),
+            phase=MeetingPhase.EXPLORE,
+            next_focus="kick off",
+        )
+        self.assertIn("Clarification protocol", system_prompt)
+        self.assertIn("[Awaiting operator clarification]", system_prompt)
+        self.assertIn("human-message channel", system_prompt)
+        self.assertIn("last_human_message", system_prompt)
+
+    def test_specialist_prompt_grants_clarification_license(self) -> None:
+        from decision_room.mas.types import MeetingPhase, ModelTarget, ModelTier, RoutingDecision
+        from decision_room.orchestration.pre_room_planning import CandidateSpecialist
+        from decision_room.orchestration.real_run_contract import HostAgenda
+        from decision_room.orchestration.room_executor import _build_argument_prompts
+
+        specialist = CandidateSpecialist(
+            role="implementation_specialist",
+            display_name="Implementation Specialist",
+            capability_profile="Evaluates feasibility.",
+            prompt_contract="Stay concrete.",
+            join_reason="Need engineering judgment.",
+        )
+        route = RoutingDecision(
+            tier=ModelTier.DEFAULT,
+            target=ModelTarget(supplier="qwen", model="test"),
+            reason="test",
+        )
+        system_prompt, _user_prompt = _build_argument_prompts(
+            specialist=specialist,
+            turn_task="evaluate feasibility",
+            snapshot=_snapshot(),
+            phase=MeetingPhase.EXPLORE,
+            round_index=1,
+            next_focus="kick off",
+            host_agenda=HostAgenda(
+                focus_points=[],
+                turns=[],
+                open_questions=[],
+                no_new_constraints=True,
+            ),
+            target_claim_ref="",
+            route=route,
+        )
+        self.assertIn("Clarification protocol", system_prompt)
+        self.assertIn("[Awaiting operator clarification]", system_prompt)
+        self.assertIn("human-message channel", system_prompt)
+        self.assertIn("room_state.last_human_message", system_prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

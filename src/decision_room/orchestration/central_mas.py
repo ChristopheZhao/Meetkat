@@ -186,6 +186,16 @@ def build_supervisor_prompts(
         "Choose 2-4 roles from the catalog only. "
         "Do not invent roles. Do not invent constraints that are not implied by "
         "the requirement or the visible state. "
+        "Clarification protocol: if the requirement is materially ambiguous in a "
+        "way that would change which specialists belong in this round (e.g., the "
+        "target user cohort, the scope boundary, or a key trade-off axis is "
+        "unclear), surface the ambiguity to the operator instead of guessing. "
+        "Write a concrete one-line question in `decision_focus` prefixed with "
+        "'[Awaiting operator clarification]', explain why in `reason`, and issue "
+        "a minimal assignment contract list (one role is fine) whose mission is to "
+        "frame the choice for the operator. The operator answers via the room "
+        "human-message channel; their reply appears as `last_human_message` in the "
+        "next round and you re-plan with that context. "
         "Return exactly one JSON object and nothing else."
     )
     user_prompt = (
