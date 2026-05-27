@@ -391,6 +391,7 @@ class LLMRoomExecutor:
         next_focus: str,
         host_agenda: Any,
         target_claim_ref: str,
+        memory_recall: dict[str, Any] | None = None,
     ) -> tuple[ArgumentOutput, DecisionContext, RoutingDecision]:
         system_prompt, user_prompt = _build_argument_prompts(
             specialist=specialist,
@@ -402,6 +403,7 @@ class LLMRoomExecutor:
             host_agenda=host_agenda,
             target_claim_ref=target_claim_ref,
             route=route,
+            memory_recall=memory_recall,
         )
         execution = await self._generate_text(
             route_ctx=route_ctx,
@@ -833,6 +835,7 @@ def _build_argument_prompts(
     host_agenda: Any,
     target_claim_ref: str,
     route: RoutingDecision,
+    memory_recall: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     schema = {
         "title": "short title",
@@ -874,9 +877,16 @@ def _build_argument_prompts(
         if turn_task
         else "- The supervisor did not provide a focus_angle hint. Your role contract is your starting frame.\n"
     )
+    memory_section = ""
+    if memory_recall:
+        memory_section = (
+            "Memory recall (shared room scratchpad + your role-specific lessons + recent shared events):\n"
+            f"{json.dumps(memory_recall, ensure_ascii=False, indent=2)}\n\n"
+        )
     user_prompt = (
         "Room state:\n"
         f"{json.dumps(_room_state_for_prompt(snapshot, phase, round_index, next_focus), ensure_ascii=False, indent=2)}\n\n"
+        f"{memory_section}"
         "Host agenda (for context — your contribution is NOT prescribed by this):\n"
         f"{json.dumps(_host_agenda_for_prompt(host_agenda), ensure_ascii=False, indent=2)}\n\n"
         "Routing info:\n"

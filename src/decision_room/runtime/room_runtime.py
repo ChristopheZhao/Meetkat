@@ -6,6 +6,13 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
+from decision_room.memory import (
+    LongTermLessonStore,
+    RoomMemoryStore,
+    default_long_term_store,
+    default_room_memory_store,
+    persist_meeting_lessons_from_snapshot,
+)
 from decision_room.orchestration import (
     RequirementPlanningService,
     LLMRoomExecutor,
@@ -52,6 +59,35 @@ class RoomPreflightError(RuntimeError):
         super().__init__("room preflight blocked normal room start")
         self.preflight_payload = preflight_payload
 
+
+class _LessonSnapshotView:
+    """Tiny adapter exposing dict-shaped snapshots as attribute access for
+    ``persist_meeting_lessons_from_snapshot``. Avoids forcing the memory
+    helper to know about runtime serialization quirks."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload or {}
+        self._transcript = [
+            _LessonTranscriptEntry(item) for item in self._payload.get("transcript", []) or []
+        ]
+
+    def __getattr__(self, name: str) -> Any:
+        if name in self._payload:
+            return self._payload[name]
+        return ""
+
+    @property
+    def transcript(self) -> list[Any]:
+        return self._transcript
+
+
+class _LessonTranscriptEntry:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload or {}
+
+    def __getattr__(self, name: str) -> Any:
+        return self._payload.get(name, "")
+
 class RoomRuntime:
     def __init__(
         self,
@@ -61,6 +97,8 @@ class RoomRuntime:
         planning_workflow: PreRoomPlanningWorkflow | None = None,
         control_policy: RoomControlPolicy | None = None,
         runtime_readiness: dict[str, Any] | None = None,
+        room_memory_store: RoomMemoryStore | None = None,
+        long_term_store: LongTermLessonStore | None = None,
     ) -> None:
         self._config = config or RuntimeConfig()
         self._planning_workflow = planning_workflow or PreRoomPlanningWorkflow(
@@ -81,6 +119,8 @@ class RoomRuntime:
             ),
         )
         self._runtime_readiness = copy.deepcopy(runtime_readiness or {})
+        self._room_memory = room_memory_store or default_room_memory_store()
+        self._long_term = long_term_store or default_long_term_store()
         self._sessions: dict[str, RoomSession] = {}
         self._lock = asyncio.Lock()
 
@@ -285,7 +325,27 @@ class RoomRuntime:
             )
         for queue in subscribers:
             self._offer(queue, serialized)
+        if event_type == "meeting.ended":
+            self._persist_meeting_lessons(room_id)
         return serialized
+
+    def _persist_meeting_lessons(self, room_id: str) -> None:
+        """Write per-specialist lessons to the long-term store when the
+        meeting concludes. Best-effort: any exception is swallowed so it
+        cannot break the room close path."""
+        try:
+            snapshot = self.get_snapshot(room_id)
+        except Exception:
+            return
+        try:
+            persist_meeting_lessons_from_snapshot(
+                room_id=room_id,
+                snapshot=_LessonSnapshotView(snapshot),
+                long_term_store=self._long_term,
+            )
+        except Exception:
+            # Long-term persistence must never break room shutdown.
+            return
 
     async def post_human_message(self, room_id: str, text: str) -> dict[str, Any]:
         message_id = f"msg_{uuid.uuid4().hex[:8]}"

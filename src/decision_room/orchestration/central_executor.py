@@ -32,6 +32,15 @@ from decision_room.mas.types import (
     DecisionContext,
     MeetingPhase,
 )
+from decision_room.memory import (
+    LongTermLessonStore,
+    RoomMemoryStore,
+    agent_scope,
+    default_long_term_store,
+    default_room_memory_store,
+    mas_scope,
+    memory_recall_for_role,
+)
 from decision_room.policies.fallback import DisasterOnlyFallbackPolicy
 from decision_room.policies.routing_control import RoutingControlPolicy
 from decision_room.providers import ProviderRegistry
@@ -78,6 +87,8 @@ class CentralizedMASExecutor:
         planner: HybridPlanningStrategy | None = None,
         use_background_threads: bool = True,
         transient_max_attempts: int = 2,
+        room_memory_store: RoomMemoryStore | None = None,
+        long_term_store: LongTermLessonStore | None = None,
     ) -> None:
         self._registry = registry
         self._router = router
@@ -101,6 +112,8 @@ class CentralizedMASExecutor:
             transient_max_attempts=transient_max_attempts,
         )
         self._transient_max_attempts = max(1, transient_max_attempts)
+        self._room_memory = room_memory_store or default_room_memory_store()
+        self._long_term = long_term_store or default_long_term_store()
 
     @classmethod
     def from_env(cls) -> RoomExecutor:
@@ -184,7 +197,14 @@ class CentralizedMASExecutor:
 
         turn_results: list[SpecialistTurnResult] = []
         target_claim_ref = ""
+        room_id = snapshot.room_id
         for specialist, slot in specialist_pairs:
+            recall = memory_recall_for_role(
+                room_id=room_id,
+                role=specialist.role,
+                room_store=self._room_memory,
+                long_term_store=self._long_term,
+            )
             # The supervisor only provides an optional ``focus_angle`` hint —
             # the specialist authors its own claim, evidence, and confidence.
             # We pass the hint through ``turn_task`` for backward signature
@@ -200,6 +220,7 @@ class CentralizedMASExecutor:
                 next_focus=next_focus,
                 host_agenda=host_agenda,
                 target_claim_ref=target_claim_ref,
+                memory_recall=recall,
             )
             route = turn_route
             turn_results.append(
@@ -211,6 +232,15 @@ class CentralizedMASExecutor:
                 )
             )
             target_claim_ref = output.claim
+            # Persist this specialist's claim to shared room memory and to
+            # the agent's own scratchpad so subsequent rounds see it as part
+            # of memory_recall.
+            self._record_specialist_memory(
+                room_id=room_id,
+                role=specialist.role,
+                round_index=round_index,
+                output=output,
+            )
 
         synthesis_output, route_ctx, synthesis_route = await runner._generate_synthesis(  # noqa: SLF001
             route_ctx=route_ctx,
@@ -314,6 +344,54 @@ class CentralizedMASExecutor:
             conclusion_type=synthesis_output.conclusion_type,
             conclusion_reason=synthesis_output.conclusion_reason,
             synthesis_message=synthesis_message,
+        )
+
+    def _record_specialist_memory(
+        self,
+        *,
+        room_id: str,
+        role: str,
+        round_index: int,
+        output: Any,
+    ) -> None:
+        shared_scope = mas_scope(room_id)
+        agent_scope_id = agent_scope(room_id, role)
+        claim = getattr(output, "claim", "")
+        evidence = list(getattr(output, "evidence", []) or [])
+        confidence = float(getattr(output, "confidence", 0.0) or 0.0)
+        fact_key = f"latest_claim.{role}"
+        self._room_memory.write_fact(
+            room_id,
+            shared_scope,
+            fact_key,
+            {
+                "round_index": round_index,
+                "claim": claim,
+                "evidence": evidence,
+                "confidence": confidence,
+            },
+        )
+        self._room_memory.record_event(
+            room_id,
+            shared_scope,
+            "specialist.claim",
+            {
+                "role": role,
+                "round_index": round_index,
+                "claim": claim,
+                "confidence": confidence,
+            },
+        )
+        self._room_memory.write_fact(
+            room_id,
+            agent_scope_id,
+            "last_self_claim",
+            {
+                "round_index": round_index,
+                "claim": claim,
+                "evidence": evidence[:3],
+                "confidence": confidence,
+            },
         )
 
     def _coordination_for_speakers(
