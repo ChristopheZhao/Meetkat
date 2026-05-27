@@ -139,6 +139,9 @@ class RoomOrchestrator:
                 "recommended_next_phase": str(
                     synthesis_artifacts.get("recommended_next_phase", "") or ""
                 ).strip().lower(),
+                "recommended_next_action": str(
+                    synthesis_artifacts.get("recommended_next_action", "") or ""
+                ).strip().lower(),
                 "artifacts": synthesis_artifacts,
             },
         )

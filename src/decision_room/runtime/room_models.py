@@ -72,6 +72,10 @@ class RoomSnapshot:
     # turn. ``_phase_for_round`` prefers this over the rule-based derivation
     # when present and valid; rules become the fallback path.
     recommended_next_phase: str = ""
+    # Optional next-action recommendation from the most recent synthesis LLM
+    # turn. Coordination strategies prefer this before falling back to the
+    # rule-based FSM (HybridCoordinationStrategy.next_action).
+    recommended_next_action: str = ""
     ended_reason: str = ""
     control_reason: str = ""
     orchestration_end_reason: str = ""

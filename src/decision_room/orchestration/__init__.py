@@ -36,6 +36,7 @@ from .pre_room_planning import (
     DefaultAgentFactory,
     DefaultRoleValidator,
     HeuristicRolePlanner,
+    LLMRolePlanner,
     PreRoomPlan,
     PreRoomPlanningWorkflow,
     RolePlanner,

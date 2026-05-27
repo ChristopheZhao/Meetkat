@@ -83,6 +83,8 @@ export type RuntimeReadiness = {
   executor_ready?: boolean;
   executor_reason?: string;
   executor_missing_env?: string[];
+  role_planner_kind?: string;
+  role_planner_degraded?: boolean;
   [key: string]: unknown;
 };
 
@@ -137,6 +139,8 @@ export type RoomSnapshot = {
   last_override: string;
   conclusion_type: string;
   conclusion_reason: string;
+  recommended_next_phase?: string;
+  recommended_next_action?: string;
   ended_reason: string;
   control_reason: string;
   orchestration_end_reason: string;

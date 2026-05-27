@@ -181,6 +181,12 @@ export function HomePage() {
     preflightReport?.operator_context,
   );
   const roomStartContract = preflightReport?.room_start_contract;
+  const planningRolePlannerDegraded = Boolean(
+    preflightReport?.runtime_readiness?.role_planner_degraded,
+  );
+  const planningRolePlannerKind = String(
+    preflightReport?.runtime_readiness?.role_planner_kind ?? "",
+  ).trim();
 
   return (
     <div className={styles.layout}>
@@ -193,6 +199,13 @@ export function HomePage() {
           输入一个深度决策问题。中心化主持人负责选角与发言顺序；每个角色智能体自主决定要说什么、给出哪些证据、用多大信心；
           短期记忆贯穿全会，长期 lessons 跨会议累积。会议结束输出一份显式的决策记录。
         </p>
+        {planningRolePlannerDegraded ? (
+          <p className={styles.warningBanner}>
+            ⚠ 当前角色选取走的是关键词匹配兜底（role_planner_kind=
+            {planningRolePlannerKind || "heuristic"}）。配置 MODEL_DEFAULT_SUPPLIER /
+            MODEL_DEFAULT_MODEL 后会自动切到 LLM 选角。
+          </p>
+        ) : null}
       </section>
 
       <section className={styles.grid}>

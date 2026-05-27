@@ -774,6 +774,135 @@ class JournalAnchoredMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("latest_claim.implementation_specialist", facts)
 
 
+class LLMRecommendedNextActionTests(unittest.TestCase):
+    """D1 regression: synthesis LLM can override the coordination FSM via
+    optional recommended_next_action. Valid values map to ActionType; empty
+    or unknown values fall back to the FSM."""
+
+    def test_parse_synthesis_extracts_valid_recommended_action(self) -> None:
+        from decision_room.orchestration.room_executor import _parse_synthesis_output
+
+        payload = json.dumps(
+            {
+                "title": "synthesis",
+                "text": "Specialists aligned.",
+                "agreement": ["aligned"],
+                "disagreement": [],
+                "open_questions": [],
+                "decision_candidate": "Adopt phased rollout",
+                "action_item_draft": ["draft cutover plan"],
+                "conclusion_type": "candidate_ready",
+                "conclusion_reason": "convergence reached",
+                "should_end_meeting": True,
+                "recommended_next_action": "end_meeting",
+            }
+        )
+        synth = _parse_synthesis_output(payload)
+        self.assertEqual(synth.recommended_next_action, "end_meeting")
+
+    def test_parse_synthesis_drops_unknown_action(self) -> None:
+        from decision_room.orchestration.room_executor import _parse_synthesis_output
+
+        payload = json.dumps(
+            {
+                "title": "synthesis",
+                "text": "x",
+                "agreement": ["a"],
+                "disagreement": [],
+                "open_questions": [],
+                "decision_candidate": "x",
+                "action_item_draft": ["a1"],
+                "conclusion_type": "follow_up_required",
+                "conclusion_reason": "x",
+                "should_end_meeting": False,
+                "recommended_next_action": "ponder-deeply",
+            }
+        )
+        synth = _parse_synthesis_output(payload)
+        self.assertEqual(synth.recommended_next_action, "")
+
+    def test_coordination_for_speakers_honors_recommended_action(self) -> None:
+        from decision_room.mas.types import ActionType, DecisionContext, DecisionSignals
+        from decision_room.orchestration.central_executor import CentralizedMASExecutor
+        from decision_room.providers import ProviderRegistry
+
+        executor = CentralizedMASExecutor(
+            registry=ProviderRegistry({}),
+            router=_router(),
+            use_background_threads=False,
+        )
+        snapshot = _snapshot()
+        snapshot.recommended_next_action = "end_meeting"
+        ctx = DecisionContext(room_id="room", phase=None, signals=DecisionSignals())
+        from decision_room.orchestration.pre_room_planning import CandidateSpecialist
+
+        specialist = CandidateSpecialist(
+            role="implementation_specialist",
+            display_name="Implementation Specialist",
+            capability_profile="x",
+            prompt_contract="x",
+            join_reason="x",
+        )
+        from decision_room.orchestration.central_mas import SpeakerSlot
+
+        coordination = executor._coordination_for_speakers(  # noqa: SLF001
+            ctx,
+            [(specialist, SpeakerSlot(agent="implementation_specialist"))],
+            snapshot=snapshot,
+        )
+        self.assertEqual(coordination.action_type, ActionType.END_MEETING)
+        self.assertIn("LLM synthesis recommended", coordination.reason)
+
+
+class LLMRolePlannerTests(unittest.TestCase):
+    """D2 regression: LLMRolePlanner is constructed when MODEL_DEFAULT env
+    is present and exposed via runtime_readiness as role_planner_kind=llm."""
+
+    def test_from_mapping_returns_none_when_env_missing(self) -> None:
+        from decision_room.orchestration.pre_room_planning import LLMRolePlanner
+
+        self.assertIsNone(LLMRolePlanner.from_mapping({}))
+        self.assertIsNone(LLMRolePlanner.from_mapping({"MODEL_DEFAULT_SUPPLIER": "qwen"}))
+
+    def test_from_mapping_constructs_when_env_present(self) -> None:
+        from decision_room.orchestration.pre_room_planning import LLMRolePlanner
+
+        env = {
+            "MODEL_DEFAULT_SUPPLIER": "qwen",
+            "MODEL_DEFAULT_MODEL": "qwen-plus",
+            "QWEN_BASE_URL": "https://example.invalid/v1",
+            "QWEN_API_KEY": "test-key",
+        }
+        planner = LLMRolePlanner.from_mapping(env)
+        self.assertIsNotNone(planner)
+
+    def test_runtime_readiness_marks_llm_role_planner_when_env_present(self) -> None:
+        from decision_room.runtime.http_api import build_runtime_from_env
+        from decision_room.runtime.room_runtime import RuntimeConfig
+
+        env = {
+            "MODEL_DEFAULT_SUPPLIER": "qwen",
+            "MODEL_DEFAULT_MODEL": "qwen-plus",
+            "MODEL_ESCALATION_SUPPLIER": "qwen",
+            "MODEL_ESCALATION_MODEL": "qwen-plus",
+            "MODEL_FALLBACK_SUPPLIER": "qwen",
+            "MODEL_FALLBACK_MODEL": "qwen-plus",
+            "QWEN_BASE_URL": "https://example.invalid/v1",
+            "QWEN_API_KEY": "test-key",
+            "DECISION_ROOM_EXECUTOR": "llm",
+            "DECISION_ROOM_PLANNER_MODE": "primary",
+        }
+        runtime = build_runtime_from_env(env, config=RuntimeConfig())
+        try:
+            readiness = runtime.runtime_readiness()
+            self.assertEqual(readiness.get("role_planner_kind"), "llm")
+            self.assertFalse(readiness.get("role_planner_degraded"))
+        finally:
+            import asyncio
+
+            asyncio.run(runtime.close())
+
+
 class LLMRecommendedNextPhaseTests(unittest.TestCase):
     """C1 regression: synthesis LLM can override the rule-based phase
     derivation for the next round. Synthesis output carries an optional

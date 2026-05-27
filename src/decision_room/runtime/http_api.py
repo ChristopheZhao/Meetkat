@@ -17,6 +17,7 @@ from decision_room.orchestration import (
     HeuristicRequirementPlanner,
     LLMRequirementPlanner,
     LLMRoomExecutor,
+    PreRoomPlanningWorkflow,
     RequirementPlanningError,
     RequirementPlanningService,
     UnavailableRoomExecutor,
@@ -278,10 +279,22 @@ def build_runtime_from_env(
         **_planner_readiness(planner_mode, requirement_planner, env_map),
         **executor_status,
     }
+    # Use the env-aware workflow so LLMRolePlanner gets wired when MODEL_DEFAULT_*
+    # is configured. Falls back to HeuristicRolePlanner only when env is missing
+    # — readiness surfaces role_planner_kind so the operator can see the choice.
+    planning_workflow = PreRoomPlanningWorkflow.from_mapping(env_map)
+    if requirement_planner is not None:
+        planning_workflow = PreRoomPlanningWorkflow(
+            requirement_planner=requirement_planner,
+            role_planner=planning_workflow._role_planner  # noqa: SLF001
+            if planning_workflow.role_planner_kind == "llm"
+            else None,
+        )
     return RoomRuntime(
         executor=executor,
         config=config,
         requirement_planner=requirement_planner,
+        planning_workflow=planning_workflow,
         runtime_readiness=readiness,
     )
 

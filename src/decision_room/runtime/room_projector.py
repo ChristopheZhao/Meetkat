@@ -189,6 +189,19 @@ class RoomProjector:
             # Stale recommendation must not persist across rounds; clear it
             # so the rule-based path takes over when the LLM doesn't recommend.
             self.snapshot.recommended_next_phase = ""
+        recommended_action = str(
+            payload.get("recommended_next_action", "")
+        ).strip().lower().replace("-", "_")
+        if recommended_action in {
+            "speak",
+            "handoff",
+            "check_consensus",
+            "end_meeting",
+            "noop",
+        }:
+            self.snapshot.recommended_next_action = recommended_action
+        else:
+            self.snapshot.recommended_next_action = ""
 
     def _apply_consensus(self, event: EventEnvelope) -> None:
         payload = event.payload

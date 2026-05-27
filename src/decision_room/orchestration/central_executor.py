@@ -198,7 +198,9 @@ class CentralizedMASExecutor:
             raise RuntimeError(
                 "supervisor speakers did not resolve to any planned specialist"
             )
-        coordination = self._coordination_for_speakers(ctx, specialist_pairs)
+        coordination = self._coordination_for_speakers(
+            ctx, specialist_pairs, snapshot=snapshot
+        )
 
         host_message = self._build_supervisor_message(
             snapshot=snapshot,
@@ -331,6 +333,7 @@ class CentralizedMASExecutor:
                 "conclusion_type": synthesis_output.conclusion_type,
                 "conclusion_reason": synthesis_output.conclusion_reason,
                 "recommended_next_phase": synthesis_output.recommended_next_phase,
+                "recommended_next_action": synthesis_output.recommended_next_action,
                 "route": _route_artifact(synthesis_route),
                 "central_mas_state_ref": "host.artifacts.central_mas.supervisor_state",
             },
@@ -502,7 +505,31 @@ class CentralizedMASExecutor:
         self,
         ctx: DecisionContext,
         specialist_pairs: list[tuple[Any, SpeakerSlot]],
+        *,
+        snapshot: Any | None = None,
     ) -> CoordinationAction:
+        recommended = (
+            str(getattr(snapshot, "recommended_next_action", "") or "")
+            .strip()
+            .lower()
+            .replace("-", "_")
+        )
+        if recommended:
+            from .room_executor import _RECOMMENDED_ACTION_TO_TYPE
+
+            recommended_action_type = _RECOMMENDED_ACTION_TO_TYPE.get(recommended)
+            if recommended_action_type is not None:
+                target_role = (
+                    specialist_pairs[0][0].role
+                    if specialist_pairs
+                    and recommended_action_type in {ActionType.HANDOFF, ActionType.SPEAK}
+                    else None
+                )
+                return CoordinationAction(
+                    action_type=recommended_action_type,
+                    reason=f"LLM synthesis recommended next action: {recommended}",
+                    target_role=target_role,
+                )
         coordination = self._coordination.next_action(ctx)
         if coordination.action_type not in {ActionType.HANDOFF, ActionType.SPEAK}:
             return coordination

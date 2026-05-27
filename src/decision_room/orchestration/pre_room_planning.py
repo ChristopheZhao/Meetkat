@@ -1,7 +1,18 @@
 from __future__ import annotations
 
+import json
+import os
+import re
 from dataclasses import asdict, dataclass, field
-from typing import Protocol
+from typing import Any, Mapping, Protocol
+
+from decision_room.providers import (
+    GenerateRequest,
+    ProviderHTTPError,
+    ProviderNetworkError,
+    ProviderRegistry,
+    ProviderTimeoutError,
+)
 
 from .brief_planner import (
     MeetingBrief,
@@ -209,7 +220,17 @@ class PreRoomPlanningWorkflow:
 
     @classmethod
     def from_env(cls) -> "PreRoomPlanningWorkflow":
-        return cls(requirement_planner=RequirementPlanningService.from_env())
+        return cls(
+            requirement_planner=RequirementPlanningService.from_env(),
+            role_planner=LLMRolePlanner.from_env(),
+        )
+
+    @classmethod
+    def from_mapping(cls, env: Mapping[str, str]) -> "PreRoomPlanningWorkflow":
+        return cls(
+            requirement_planner=RequirementPlanningService.from_mapping(env),
+            role_planner=LLMRolePlanner.from_mapping(env),
+        )
 
     def plan_room(self, requirement: str, *, allow_fallback: bool = False) -> PreRoomPlan:
         brief = self._requirement_planner.plan_requirement(
@@ -379,6 +400,204 @@ _ROLE_BLUEPRINTS = (
         "focus_areas": ["observability", "operator workflow", "supportability"],
     },
 )
+
+
+class LLMRolePlanner:
+    """LLM-driven role selection.
+
+    Asks the model to choose 2-4 specialists from ``_ROLE_BLUEPRINTS`` based
+    on the meeting brief. The catalog is exposed verbatim so the LLM has
+    enough role-shape signal to make a sensible selection; the model is
+    asked to return only role names (no new roles invented). Each pick
+    becomes a ``CandidateSpecialist`` constructed from the blueprint, with
+    an optional ``join_reason`` override emitted by the LLM.
+
+    This replaces the keyword-matching ``HeuristicRolePlanner`` whenever a
+    provider is configured. The heuristic stays as the documented fallback
+    when no LLM provider env is wired.
+    """
+
+    def __init__(self, registry: ProviderRegistry, supplier: str, model: str) -> None:
+        self._registry = registry
+        self._supplier = supplier
+        self._model = model
+
+    @classmethod
+    def from_env(cls) -> "LLMRolePlanner | None":
+        return cls.from_mapping(os.environ)
+
+    @classmethod
+    def from_mapping(cls, env: Mapping[str, str]) -> "LLMRolePlanner | None":
+        supplier = env.get("MODEL_DEFAULT_SUPPLIER", "").strip()
+        model = env.get("MODEL_DEFAULT_MODEL", "").strip()
+        if not supplier or not model:
+            return None
+        try:
+            registry = ProviderRegistry.from_openai_compatible_configs(
+                {supplier: _llm_role_planner_provider_config(supplier, env)}
+            )
+        except Exception:
+            return None
+        return cls(registry=registry, supplier=supplier, model=model)
+
+    def plan_roles(self, brief: MeetingBrief) -> list[CandidateSpecialist]:
+        system_prompt, user_prompt = _build_role_planner_prompts(brief)
+        provider = self._registry.get(self._supplier)
+        try:
+            response = provider.generate(
+                GenerateRequest(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    model=self._model,
+                    temperature=0.2,
+                )
+            )
+        except (ProviderTimeoutError, ProviderNetworkError, ProviderHTTPError):
+            # LLM-role planning is best-effort. Falling back to the
+            # heuristic on transport failure beats blocking room creation.
+            return HeuristicRolePlanner().plan_roles(brief)
+
+        try:
+            picks = _parse_role_planner_response(response.text)
+        except Exception:
+            return HeuristicRolePlanner().plan_roles(brief)
+        if not picks:
+            return HeuristicRolePlanner().plan_roles(brief)
+        blueprints_by_role = {item["role"]: item for item in _ROLE_BLUEPRINTS}
+        selected: list[CandidateSpecialist] = []
+        seen: set[str] = set()
+        for pick in picks:
+            role = pick["role"]
+            if role in seen:
+                continue
+            blueprint = blueprints_by_role.get(role)
+            if blueprint is None:
+                continue
+            join_reason = pick.get("join_reason", "").strip() or str(blueprint["join_reason"])
+            selected.append(
+                CandidateSpecialist(
+                    role=str(blueprint["role"]),
+                    display_name=str(blueprint["display_name"]),
+                    capability_profile=str(blueprint["capability_profile"]),
+                    prompt_contract=str(blueprint["prompt_contract"]),
+                    join_reason=join_reason,
+                    focus_areas=list(blueprint["focus_areas"]),
+                )
+            )
+            seen.add(role)
+        if not selected:
+            return HeuristicRolePlanner().plan_roles(brief)
+        return selected[:4]
+
+
+def _build_role_planner_prompts(brief: MeetingBrief) -> tuple[str, str]:
+    catalog = [
+        {
+            "role": item["role"],
+            "display_name": item["display_name"],
+            "capability_profile": item["capability_profile"],
+            "focus_areas": list(item["focus_areas"]),
+        }
+        for item in _ROLE_BLUEPRINTS
+    ]
+    brief_payload = {
+        "requirement": brief.requirement,
+        "topic": brief.topic,
+        "goal": brief.goal,
+        "current_focus": brief.current_focus,
+        "constraints": list(brief.constraints),
+        "open_questions": list(brief.open_questions),
+    }
+    schema = {
+        "selected_roles": [
+            {
+                "role": "role identifier from catalog",
+                "join_reason": "OPTIONAL one-line justification grounded in this brief",
+            }
+        ]
+    }
+    system_prompt = (
+        "You are the role-planning agent for an agentic multi-agent decision "
+        "room. Pick the right specialists for THIS meeting from the role "
+        "catalog. Choose 2 to 4 roles. Choose them based on the actual "
+        "decision shape implied by the requirement and the brief — not by "
+        "keyword matching. Do not invent roles. Each selection must be one "
+        "of the catalog entries verbatim. If a role does not contribute "
+        "useful evidence to this brief, do not include it. Return exactly "
+        "one JSON object and nothing else."
+    )
+    user_prompt = (
+        "Meeting brief:\n"
+        f"{json.dumps(brief_payload, ensure_ascii=False, indent=2)}\n\n"
+        "Role catalog (you may select from these only):\n"
+        f"{json.dumps(catalog, ensure_ascii=False, indent=2)}\n\n"
+        "Task:\n"
+        "- Pick 2-4 roles from the catalog.\n"
+        "- Each entry must reference a role identifier in the catalog.\n"
+        "- Optional join_reason explains why THIS specific brief needs THIS specific role.\n"
+        "- Order the list by speaking priority for the first round.\n\n"
+        "Output schema example:\n"
+        f"{json.dumps(schema, ensure_ascii=False, indent=2)}"
+    )
+    return system_prompt, user_prompt
+
+
+def _parse_role_planner_response(raw: str) -> list[dict[str, str]]:
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or start >= end:
+        raise ValueError("role planner response does not contain a JSON object")
+    payload = json.loads(text[start : end + 1])
+    raw_roles = payload.get("selected_roles") if isinstance(payload, dict) else None
+    if not isinstance(raw_roles, list):
+        return []
+    picks: list[dict[str, str]] = []
+    for entry in raw_roles:
+        if not isinstance(entry, dict):
+            continue
+        role = str(entry.get("role", "")).strip().lower()
+        if not role:
+            continue
+        picks.append(
+            {
+                "role": role,
+                "join_reason": str(entry.get("join_reason", "")).strip(),
+            }
+        )
+    return picks
+
+
+def _llm_role_planner_provider_config(supplier: str, env: Mapping[str, str]) -> Any:
+    """Local lightweight provider-config builder so we do not import the
+    private helper from brief_planner.py."""
+    from decision_room.providers import ProviderConfig
+
+    supplier_upper = supplier.upper()
+    base_url = env.get(f"{supplier_upper}_BASE_URL", "").strip()
+    api_key = env.get(f"{supplier_upper}_API_KEY", "").strip()
+    if not base_url or not api_key:
+        raise ValueError(f"missing {supplier_upper}_BASE_URL or {supplier_upper}_API_KEY")
+    timeout_env = env.get(f"{supplier_upper}_TIMEOUT_SEC", "").strip() or env.get(
+        "MODEL_TIMEOUT_SEC", ""
+    ).strip()
+    try:
+        timeout_sec = int(timeout_env) if timeout_env else 45
+    except ValueError:
+        timeout_sec = 45
+    return ProviderConfig(
+        supplier=supplier,
+        base_url=base_url,
+        api_key=api_key,
+        timeout_sec=timeout_sec,
+    )
 
 
 class HeuristicRolePlanner:

@@ -249,6 +249,29 @@
       ]
     },
     {
+      "id": "PLAN-20260513-010",
+      "title": "Rule-base → LLM-base for role planner + coordination; frontend visibility + E2E",
+      "kind": "feature",
+      "status": "completed",
+      "priority": "P1",
+      "owner": "codex",
+      "file_path": "docs/plans/active/PLAN-20260513-010.md",
+      "confirmed_by_user": true,
+      "created_at": "2026-05-28T02:00:00Z",
+      "updated_at": "2026-05-28T03:00:00Z",
+      "archived_at": null,
+      "notes": [
+        {
+          "at": "2026-05-28T02:00:00Z",
+          "text": "Created after user goal: '继续推，修完基本问题，把 rule base 修正为 LLM base，然后修复前端，再来进行联调测试，直到测试通过'. Targets the four remaining rule-based residuals: coordination FSM, HeuristicRolePlanner as silent default, frontend has no role_planner_degraded banner, frontend doesn't surface LLM recommendations."
+        },
+        {
+          "at": "2026-05-28T03:00:00Z",
+          "text": "D1-D5 all shipped. SynthesisOutput.recommended_next_action overrides coordination FSM. LLMRolePlanner is default whenever provider env exists; HeuristicRolePlanner becomes documented fallback. Frontend home renders role_planner_degraded banner when applicable. Room UI surfaces recommended_next_phase + recommended_next_action. Real-LLM smoke against Airflow→Prefect migration verified end-to-end. 121 backend tests OK (was 115, +6 new); frontend build + 10 contract tests green."
+        }
+      ]
+    },
+    {
       "id": "PLAN-20260513-009",
       "title": "LLM-recommended phase pacing + planner-degradation visibility",
       "kind": "fix",

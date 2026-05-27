@@ -122,6 +122,12 @@ class SynthesisOutput:
     # formula. Valid values: "explore", "debate", "synthesize", "decide".
     # Empty string means "no recommendation — let the runtime decide".
     recommended_next_phase: str = ""
+    # Optional. When non-empty, the synthesis agent is recommending the
+    # coordination intent for the next round (replacing the
+    # ``HybridCoordinationStrategy`` FSM output). Valid values:
+    # "speak", "handoff", "check_consensus", "end_meeting", "noop".
+    # Empty string means "no recommendation — let the FSM decide".
+    recommended_next_action: str = ""
 
 
 @dataclass(frozen=True)
@@ -245,7 +251,9 @@ class LLMRoomExecutor:
         if not specialist_turns:
             raise ValueError("host agenda did not resolve to any valid specialist turns")
 
-        coordination = self._coordination_for_turns(ctx, specialist_turns)
+        coordination = self._coordination_for_turns(
+            ctx, specialist_turns, snapshot=snapshot
+        )
 
         host_message = self._build_host_message(
             snapshot=snapshot,
@@ -349,6 +357,7 @@ class LLMRoomExecutor:
                 "conclusion_type": synthesis_output.conclusion_type,
                 "conclusion_reason": synthesis_output.conclusion_reason,
                 "recommended_next_phase": synthesis_output.recommended_next_phase,
+                "recommended_next_action": synthesis_output.recommended_next_action,
                 "route": _route_artifact(synthesis_route),
             },
         )
@@ -641,7 +650,31 @@ class LLMRoomExecutor:
         self,
         ctx: DecisionContext,
         specialist_turns: list[tuple[CandidateSpecialist, str]],
+        *,
+        snapshot: Any | None = None,
     ) -> CoordinationAction:
+        # LLM-recommended action wins: if the prior synthesis turn emitted a
+        # ``recommended_next_action``, honor it instead of running the FSM.
+        recommended = (
+            str(getattr(snapshot, "recommended_next_action", "") or "")
+            .strip()
+            .lower()
+            .replace("-", "_")
+        )
+        if recommended:
+            recommended_action_type = _RECOMMENDED_ACTION_TO_TYPE.get(recommended)
+            if recommended_action_type is not None:
+                target_role = (
+                    specialist_turns[0][0].role
+                    if specialist_turns
+                    and recommended_action_type in {ActionType.HANDOFF, ActionType.SPEAK}
+                    else None
+                )
+                return CoordinationAction(
+                    action_type=recommended_action_type,
+                    reason=f"LLM synthesis recommended next action: {recommended}",
+                    target_role=target_role,
+                )
         coordination = self._coordination.next_action(ctx)
         if coordination.action_type not in {ActionType.HANDOFF, ActionType.SPEAK}:
             return coordination
@@ -951,6 +984,8 @@ def _build_synthesis_prompts(
         "should_end_meeting": False,
         # Optional. Empty string means "let the runtime decide".
         "recommended_next_phase": "",
+        # Optional. Empty string means "let the coordination FSM decide".
+        "recommended_next_action": "",
     }
     system_prompt = (
         "You are the synthesis capability in a multi-agent decision room. "
@@ -981,7 +1016,8 @@ def _build_synthesis_prompts(
         "- Do not use facts already covered by room_state.validated_context as the reason for follow-up or blocked status.\n"
         "- Set should_end_meeting to true only when the meeting should stop now and hand off to execution, follow-up, or human decision outside the room.\n"
         "- Set should_end_meeting to false when another in-room round is still necessary to resolve the current discussion.\n"
-        "- OPTIONAL: emit recommended_next_phase if you want to override the runtime's default phase pacing for the next round. Valid values: 'explore' (open up new angles), 'debate' (stress-test current claims), 'synthesize' (converge on a recommendation), 'decide' (lock the candidate). Leave it empty when the default rule-based pacing is fine; only use it when you have a clear judgment that the room needs to advance or pull back a phase.\n\n"
+        "- OPTIONAL: emit recommended_next_phase if you want to override the runtime's default phase pacing for the next round. Valid values: 'explore' (open up new angles), 'debate' (stress-test current claims), 'synthesize' (converge on a recommendation), 'decide' (lock the candidate). Leave it empty when the default rule-based pacing is fine; only use it when you have a clear judgment that the room needs to advance or pull back a phase.\n"
+        "- OPTIONAL: emit recommended_next_action if you want to override the coordination FSM for the next round. Valid values: 'speak' (next specialist authors a new contribution), 'handoff' (explicitly transfer to another specialist for a targeted response), 'check_consensus' (force a consensus probe even if signals do not trigger it), 'end_meeting' (the room is done, write the decision record), 'noop' (no coordination action — let signals decide). Leave empty when the FSM choice is fine.\n\n"
         "Output schema example:\n"
         f"{json.dumps(schema, ensure_ascii=False, indent=2)}"
     )
@@ -1056,6 +1092,9 @@ def _parse_synthesis_output(raw: str) -> SynthesisOutput:
     recommended_next_phase = _coerce_recommended_next_phase(
         payload.get("recommended_next_phase")
     )
+    recommended_next_action = _coerce_recommended_next_action(
+        payload.get("recommended_next_action")
+    )
     return SynthesisOutput(
         title=title,
         text=text,
@@ -1068,10 +1107,19 @@ def _parse_synthesis_output(raw: str) -> SynthesisOutput:
         conclusion_reason=conclusion_reason,
         should_end_meeting=should_end_meeting,
         recommended_next_phase=recommended_next_phase,
+        recommended_next_action=recommended_next_action,
     )
 
 
 _RECOMMENDED_PHASES = {"explore", "debate", "synthesize", "decide"}
+_RECOMMENDED_ACTIONS = {"speak", "handoff", "check_consensus", "end_meeting", "noop"}
+_RECOMMENDED_ACTION_TO_TYPE = {
+    "speak": ActionType.SPEAK,
+    "handoff": ActionType.HANDOFF,
+    "check_consensus": ActionType.CHECK_CONSENSUS,
+    "end_meeting": ActionType.END_MEETING,
+    "noop": ActionType.NOOP,
+}
 
 
 def _coerce_recommended_next_phase(value: object) -> str:
@@ -1081,6 +1129,15 @@ def _coerce_recommended_next_phase(value: object) -> str:
     if not normalized:
         return ""
     return normalized if normalized in _RECOMMENDED_PHASES else ""
+
+
+def _coerce_recommended_next_action(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = value.strip().lower().replace("-", "_")
+    if not normalized:
+        return ""
+    return normalized if normalized in _RECOMMENDED_ACTIONS else ""
 
 
 def _load_json_payload(raw: str, role: str) -> dict[str, Any]:

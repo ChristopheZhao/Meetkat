@@ -209,6 +209,8 @@ export function RoomPage() {
   const centralMas = readLatestCentralMasState(snapshot);
   const speakers = centralMas?.speakers ?? [];
   const centralTopology = centralMas?.topology ?? "";
+  const recommendedNextPhase = String(snapshot.recommended_next_phase ?? "").trim();
+  const recommendedNextAction = String(snapshot.recommended_next_action ?? "").trim();
 
   const humanMessageMutation = useMutation({
     mutationFn: (text: string) => postHumanMessage(snapshot.room_id, text),
@@ -400,6 +402,21 @@ export function RoomPage() {
                     </p>
                   </article>
                 ))}
+              </div>
+            ) : null}
+            {recommendedNextPhase || recommendedNextAction ? (
+              <div className={styles.assignmentList}>
+                <p className={styles.sectionLabel}>下一轮 LLM 建议</p>
+                {recommendedNextPhase ? (
+                  <p className={styles.secondaryText}>
+                    阶段建议：{formatToken(recommendedNextPhase)}
+                  </p>
+                ) : null}
+                {recommendedNextAction ? (
+                  <p className={styles.secondaryText}>
+                    动作建议：{formatToken(recommendedNextAction)}
+                  </p>
+                ) : null}
               </div>
             ) : null}
           </section>
