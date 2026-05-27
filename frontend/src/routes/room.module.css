@@ -12,14 +12,14 @@
   background:
     linear-gradient(90deg, rgba(10, 14, 20, 0.88), rgba(10, 14, 20, 0.58), rgba(10, 14, 20, 0.2)),
     url("../assets/meeting/central-decision-room.webp") center / cover;
-  border: 1px solid rgba(247, 249, 250, 0.18);
+  border: 1px solid var(--border);
   box-shadow: var(--shadow);
-  color: #f7fafb;
+  color: var(--text);
 }
 
 .statusLine {
   margin: 0 0 8px;
-  color: rgba(247, 249, 250, 0.68);
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.12em;
   font-size: 0.8rem;
@@ -33,13 +33,13 @@
 .goal {
   margin: 0;
   max-width: 820px;
-  color: rgba(247, 249, 250, 0.78);
+  color: var(--text-muted);
 }
 
 .requirement {
   margin: 12px 0 0;
   max-width: 900px;
-  color: rgba(247, 249, 250, 0.92);
+  color: var(--text);
   line-height: 1.5;
 }
 
@@ -47,15 +47,15 @@
   min-width: 160px;
   border-radius: var(--radius-md);
   padding: 16px;
-  background: rgba(247, 249, 250, 0.12);
-  border: 1px solid rgba(247, 249, 250, 0.18);
+  background: var(--surface);
+  border: 1px solid var(--border);
 }
 
 .connectionLabel {
   display: block;
   margin-bottom: 4px;
   font-size: 0.8rem;
-  color: rgba(247, 249, 250, 0.68);
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
@@ -76,7 +76,7 @@
 .transcriptPanel {
   border-radius: var(--radius-lg);
   padding: 20px;
-  background: rgba(247, 249, 250, 0.93);
+  background: var(--surface-elevated);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
 }
@@ -228,30 +228,48 @@
 .transcriptCard,
 .pendingCard {
   border-radius: var(--radius-md);
-  padding: 16px;
-  border: 1px solid rgba(17, 34, 41, 0.08);
-  background: rgba(255, 255, 255, 0.72);
+  padding: 18px;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+  animation: fadeInUp 240ms ease;
+  border-left-width: 3px;
 }
 
 .transcriptCard[data-role="host"] {
-  border-color: rgba(12, 138, 120, 0.18);
+  border-left-color: var(--role-host);
 }
 
 .transcriptCard[data-role="implementation_specialist"] {
-  border-color: rgba(45, 118, 166, 0.18);
+  border-left-color: var(--role-implementation);
 }
 
 .transcriptCard[data-role="risk_specialist"] {
-  border-color: rgba(185, 103, 44, 0.22);
+  border-left-color: var(--role-risk);
+}
+
+.transcriptCard[data-role="product_specialist"] {
+  border-left-color: var(--role-product);
+}
+
+.transcriptCard[data-role="operations_specialist"] {
+  border-left-color: var(--role-operations);
 }
 
 .transcriptCard[data-role="synthesis"] {
-  border-color: rgba(71, 74, 153, 0.22);
+  border-left-color: var(--role-synthesis);
+}
+
+.transcriptCard[data-role="human"] {
+  border-left-color: var(--role-human);
 }
 
 .pendingCard {
   border-style: dashed;
-  background: rgba(12, 138, 120, 0.06);
+  background: linear-gradient(90deg, var(--surface-muted), var(--accent-soft), var(--surface-muted));
+  background-size: 200% 100%;
+  animation: shimmer 1.6s linear infinite;
+  border-left-color: var(--accent);
 }
 
 .messageHeader {
@@ -278,13 +296,14 @@
 .eventPill {
   display: inline-flex;
   align-items: center;
-  border-radius: var(--radius-sm);
-  padding: 4px 8px;
-  background: rgba(17, 34, 41, 0.07);
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 0.8rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
 }
 
 .transcriptCard h4 {

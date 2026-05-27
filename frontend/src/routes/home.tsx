@@ -52,16 +52,16 @@ function extractPreflightReport(error: unknown): RoomPreflightReport | null {
 
 function plannerStatus(readiness: RuntimeReadiness): string {
   if (readiness.primary_planner_ready) {
-    return "Primary planner ready";
+    return "主规划器就绪";
   }
   if (readiness.fallback_planner_ready) {
-    return "Fallback planner only";
+    return "仅 fallback 规划器";
   }
-  return "Planner blocked";
+  return "规划器不可用";
 }
 
 function executorStatus(readiness: RuntimeReadiness): string {
-  return readiness.executor_ready ? "Executor ready" : "Executor blocked";
+  return readiness.executor_ready ? "执行器就绪" : "执行器不可用";
 }
 
 function formatTargetIdentity(target?: ProviderTarget): string {
@@ -185,39 +185,34 @@ export function HomePage() {
   return (
     <div className={styles.layout}>
       <section className={styles.hero}>
-        <p className={styles.kicker}>Centralized supervisor MAS</p>
+        <p className={styles.kicker}>中心化 Supervisor · 子智能体自主</p>
         <h2 className={styles.heading}>
-          Open a live decision room with a supervisor, role agents, and replayable communication.
+          实时打开一个有主持人 + 角色智能体 + 可重放通信的决策会议室
         </h2>
         <p className={styles.copy}>
-          Enter one deep decision problem. The central supervisor creates the
-          meeting brief, assigns specialist agents, streams their work products
-          through the room event protocol, and closes with an explicit decision
-          record.
+          输入一个深度决策问题。中心化主持人负责选角与发言顺序；每个角色智能体自主决定要说什么、给出哪些证据、用多大信心；
+          短期记忆贯穿全会，长期 lessons 跨会议累积。会议结束输出一份显式的决策记录。
         </p>
       </section>
 
       <section className={styles.grid}>
         <form className={styles.card} onSubmit={handleCreateRoom}>
           <div className={styles.cardHeader}>
-            <h3>Create A Room</h3>
+            <h3>新建会议室</h3>
             <span className={styles.badge}>Central MAS</span>
           </div>
           <label className={styles.field}>
-            <span>Requirement</span>
+            <span>讨论问题</span>
             <textarea
               rows={5}
               value={requirement}
               onChange={(event) => handleRequirementChange(event.target.value)}
-              placeholder="Describe the need, desired outcome, and any hard boundaries you already know."
+              placeholder="描述需要决策的问题、期望产出、以及任何已知的硬性边界。"
             />
           </label>
           <p className={styles.helper}>
-            Open room creates the meeting immediately. The supervisor and
-            specialist agents will ask you clarifying questions through the
-            room's human-message channel whenever they need more from you —
-            no separate pre-room form. Preview brief is optional and only
-            shows what the planner thinks before you commit.
+            「打开会议室」会直接创建并开会。主持人和角色智能体如果需要更多上下文，会通过会议室的人类消息通道直接问你 ——
+            不会用前置表单卡住你。「预览简报」是可选的，只展示规划器在开会前看到的视角，不会阻断开会。
           </p>
           <div className={styles.buttonRow}>
             <button
@@ -226,14 +221,14 @@ export function HomePage() {
               onClick={() => void handlePreviewBrief()}
               disabled={isSubmitting}
             >
-              {preflightMutation.isPending ? "Previewing brief..." : "Preview brief"}
+              {preflightMutation.isPending ? "正在预览…" : "预览简报"}
             </button>
             <button
               className={styles.primaryButton}
               type="submit"
               disabled={isSubmitting}
             >
-              {createMutation.isPending ? "Creating room..." : "Open room"}
+              {createMutation.isPending ? "正在创建…" : "打开会议室"}
             </button>
           </div>
           {activeError ? (
@@ -245,39 +240,38 @@ export function HomePage() {
             <section className={styles.preflightPanel}>
                 <div className={styles.preflightHeader}>
                   <div>
-                  <p className={styles.preflightKicker}>Brief preview</p>
-                  <h4>What the planner sees</h4>
+                  <p className={styles.preflightKicker}>简报预览</p>
+                  <h4>规划器看到的视角</h4>
                   </div>
                 <span className={styles.preflightReady}>
-                  Preview only · Open room ignores any planner concerns and
-                  lets the agents ask you in-meeting
+                  仅供预览 · 「打开会议室」不会被这里的任何提示卡住，智能体会在会中主动澄清
                 </span>
               </div>
               <p className={styles.preflightSummary}>
                 {roomStartContract?.root_cause_hypothesis ||
-                  "No external dependency blockers were detected before room start."}
+                  "未检测到任何外部依赖阻塞，可放心开会。"}
               </p>
               <dl className={styles.preflightMeta}>
                 <div>
-                  <dt>Meeting objective</dt>
+                  <dt>会议目标</dt>
                   <dd>{preflightReport.meeting_objective}</dd>
                 </div>
                 <div>
-                  <dt>Initial focus</dt>
+                  <dt>首轮焦点</dt>
                   <dd>{preflightReport.initial_focus}</dd>
                 </div>
                 <div>
-                  <dt>Recommended surface</dt>
+                  <dt>建议入口</dt>
                   <dd>{formatToken(roomStartContract?.recommended_surface || "")}</dd>
                 </div>
                 {entryScope ? (
                   <div>
-                    <dt>Entry scope</dt>
+                    <dt>入口范围</dt>
                     <dd>{formatToken(entryScope)}</dd>
                   </div>
                 ) : null}
                 <div>
-                  <dt>Runtime readiness</dt>
+                  <dt>运行时就绪</dt>
                   <dd>
                     {plannerStatus(preflightReport.runtime_readiness)} ·{" "}
                     {executorStatus(preflightReport.runtime_readiness)}
@@ -285,13 +279,13 @@ export function HomePage() {
                 </div>
                 {plannerTarget ? (
                   <div>
-                    <dt>Planner target</dt>
+                    <dt>规划器路由</dt>
                     <dd>{plannerTarget}</dd>
                   </div>
                 ) : null}
                 {executorTargets ? (
                   <div>
-                    <dt>Executor targets</dt>
+                    <dt>执行器路由</dt>
                     <dd>{executorTargets}</dd>
                   </div>
                 ) : null}
@@ -308,10 +302,10 @@ export function HomePage() {
               ))}
               <div className={styles.preflightLists}>
                 <div>
-                  <p className={styles.listTitle}>System blockers</p>
+                  <p className={styles.listTitle}>系统阻塞项</p>
                   {roomStartContract && roomStartContract.system_blockers.length === 0 ? (
                     <p className={styles.emptyState}>
-                      None detected. Runtime/bootstrap is not blocking room start.
+                      未检测到任何运行时 / 基础设施阻塞。
                     </p>
                   ) : (
                     <ul className={styles.checklist}>
@@ -322,11 +316,11 @@ export function HomePage() {
                   )}
                 </div>
                 <div>
-                  <p className={styles.listTitle}>Contextual questions</p>
+                  <p className={styles.listTitle}>开放问题（智能体会在会中追问）</p>
                   {roomStartContract &&
                   roomStartContract.contextual_open_questions.length === 0 ? (
                     <p className={styles.emptyState}>
-                      No contextual open questions were surfaced during planning.
+                      规划阶段没有发现需要进一步澄清的问题。
                     </p>
                   ) : (
                     <ul className={styles.checklist}>
@@ -339,7 +333,7 @@ export function HomePage() {
               </div>
               {roomStartContract && roomStartContract.known_context.length > 0 ? (
                 <div>
-                  <p className={styles.listTitle}>Known context</p>
+                  <p className={styles.listTitle}>已知上下文</p>
                   <ul className={styles.checklist}>
                     {roomStartContract.known_context.map((item) => (
                       <li key={item}>{item}</li>
@@ -349,7 +343,7 @@ export function HomePage() {
               ) : null}
               {preflightReport.candidate_specialist_roster.length > 0 ? (
                 <div>
-                  <p className={styles.listTitle}>Planned specialists</p>
+                  <p className={styles.listTitle}>候选角色智能体</p>
                   <div className={styles.specialistList}>
                     {preflightReport.candidate_specialist_roster.map((specialist) => (
                       <article className={styles.specialistCard} key={specialist.role}>
@@ -373,13 +367,13 @@ export function HomePage() {
 
         <div className={styles.card}>
           <div className={styles.cardHeader}>
-            <h3>Recent Rooms</h3>
+            <h3>最近的会议室</h3>
             <span className={styles.badgeMuted}>{rooms.length}</span>
           </div>
           <div className={styles.roomList}>
             {rooms.length === 0 ? (
               <p className={styles.emptyState}>
-                No rooms yet. Create the first one to start the runtime.
+                还没有会议室，创建第一个就开始运行了。
               </p>
             ) : (
               rooms.map((room) => (
@@ -393,8 +387,8 @@ export function HomePage() {
                     <p className={styles.roomTopic}>{room.topic}</p>
                     <p className={styles.roomMeta}>
                       {room.status === "ended"
-                        ? `${formatToken(room.conclusion_type || room.status)} · closed`
-                        : `${room.phase} · round ${room.round_index} · ${room.status}`}{" "}
+                        ? `${formatToken(room.conclusion_type || room.status)} · 已结束`
+                        : `${room.phase} · 第 ${room.round_index} 轮 · ${room.status}`}{" "}
                       · {room.brief_source}
                     </p>
                   </div>

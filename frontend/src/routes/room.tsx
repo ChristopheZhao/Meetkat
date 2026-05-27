@@ -87,14 +87,14 @@ function useRoomSession(initialSnapshot: RoomSnapshot) {
 }
 
 const roleLabelMap: Record<string, string> = {
-  host: "Host",
-  human: "Human",
-  system: "System",
-  synthesis: "Synthesis",
-  implementation_specialist: "Systems Architect",
-  product_specialist: "Product Strategist",
-  risk_specialist: "Risk Controller",
-  operations_specialist: "Decision Scribe",
+  host: "主持人",
+  human: "你（操作员）",
+  system: "系统",
+  synthesis: "决策记录员",
+  implementation_specialist: "系统架构师",
+  product_specialist: "产品策略师",
+  risk_specialist: "风险控制师",
+  operations_specialist: "运营观察员",
 };
 
 const roleAvatarMap: Record<string, string> = {
@@ -125,7 +125,7 @@ function buildInitials(value: string): string {
 function getRoleVisual(role: string) {
   const normalized = role.trim().toLowerCase();
   return {
-    label: roleLabelMap[normalized] || formatToken(normalized) || "Unknown",
+    label: roleLabelMap[normalized] || formatToken(normalized) || "未知角色",
     initials: buildInitials(normalized),
     avatarSrc: roleAvatarMap[normalized],
   };
@@ -176,7 +176,7 @@ export function RoomPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [humanMessage, setHumanMessage] = useState("");
-  const [overrideText, setOverrideText] = useState("Stop and lock the current draft.");
+  const [overrideText, setOverrideText] = useState("立即停止讨论并锁定当前候选决策。");
   const roomEnded = snapshot.status === "ended";
   const planningObjective = readPlanningText(
     snapshot,
@@ -196,7 +196,7 @@ export function RoomPage() {
     () => buildRoleDirectory(snapshot, plannedSpecialists),
     [snapshot, plannedSpecialists],
   );
-  const conclusionType = formatToken(snapshot.conclusion_type || "pending");
+  const conclusionType = formatToken(snapshot.conclusion_type || "pending（进行中）");
   const conclusionReason =
     snapshot.conclusion_reason || snapshot.ended_reason || snapshot.consensus.reason;
   const entryScope = readOperatorContextValue(snapshot, "entry_scope");
@@ -226,7 +226,7 @@ export function RoomPage() {
   });
 
   const humanInterventionNotice = roomEnded
-    ? snapshot.ended_reason || "This room has ended and no longer accepts writes."
+    ? snapshot.ended_reason || "本会议室已结束，不再接受新的输入。"
     : humanMessageMutation.error instanceof Error
       ? humanMessageMutation.error.message
       : humanOverrideMutation.error instanceof Error
@@ -247,16 +247,16 @@ export function RoomPage() {
       <header className={styles.hero}>
         <div>
           <p className={styles.statusLine}>
-            {snapshot.status} · {snapshot.phase} · round {snapshot.round_index} · brief {snapshot.brief_source}
+            状态 {snapshot.status} · 阶段 {snapshot.phase} · 第 {snapshot.round_index} 轮 · 简报来源 {snapshot.brief_source}
           </p>
           <h2 className={styles.topic}>{snapshot.topic}</h2>
           <p className={styles.goal}>{snapshot.goal || snapshot.current_focus}</p>
           <p className={styles.requirement}>
-            Requirement: {snapshot.requirement || "No original requirement recorded."}
+            原始需求：{snapshot.requirement || "未记录原始需求。"}
           </p>
         </div>
         <div className={styles.connection}>
-          <span className={styles.connectionLabel}>Transport</span>
+          <span className={styles.connectionLabel}>实时传输</span>
           <strong>{connectionState}</strong>
         </div>
       </header>
@@ -265,23 +265,23 @@ export function RoomPage() {
         <aside className={styles.sidePanel}>
           {snapshot.brief_source !== "agent" ? (
             <section className={styles.warningCard}>
-              <h3>Planner status</h3>
+              <h3>规划器状态</h3>
               <p className={styles.warningCopy}>
-                This room was created without a validated agent-planned brief.
+                本会议没有走通真 LLM 规划器，当前简报是 fallback。
               </p>
               <p className={styles.warningReason}>
-                {snapshot.brief_source_reason || "No planner failure reason was recorded."}
+                {snapshot.brief_source_reason || "未记录规划器失败原因。"}
               </p>
             </section>
           ) : null}
 
           <section className={styles.panelCard}>
-            <h3>Meeting brief</h3>
-            <span className={styles.sectionLabel}>Objective</span>
-            <p className={styles.focus}>{planningObjective || "Waiting for planner objective"}</p>
-            <span className={styles.sectionLabel}>Current focus</span>
+            <h3>会议简报</h3>
+            <span className={styles.sectionLabel}>目标</span>
+            <p className={styles.focus}>{planningObjective || "等待规划器输出目标…"}</p>
+            <span className={styles.sectionLabel}>当前焦点</span>
             <p className={styles.secondaryText}>
-              {snapshot.current_focus || planningInitialFocus || "Waiting for host focus"}
+              {snapshot.current_focus || planningInitialFocus || "等待主持人选定焦点…"}
             </p>
             <ul className={styles.constraintList}>
               {snapshot.constraints.map((item) => (
@@ -290,7 +290,7 @@ export function RoomPage() {
             </ul>
             {snapshot.open_questions.length > 0 ? (
               <div className={styles.openQuestions}>
-                <h4>Open questions</h4>
+                <h4>开放问题（智能体会在会中追问）</h4>
                 <ul className={styles.questionList}>
                   {snapshot.open_questions.map((item) => (
                     <li key={item}>{item}</li>
@@ -301,27 +301,27 @@ export function RoomPage() {
           </section>
 
           <section className={styles.panelCard}>
-            <h3>Pre-room contract</h3>
+            <h3>会前契约</h3>
             <div className={styles.contractMeta}>
               {entryScope ? (
                 <div>
-                  <span className={styles.sectionLabel}>Entry scope</span>
+                  <span className={styles.sectionLabel}>入口范围</span>
                   <p className={styles.secondaryText}>{formatToken(entryScope)}</p>
                 </div>
               ) : null}
               {preflightReady !== null ? (
                 <div>
-                  <span className={styles.sectionLabel}>Room start gate</span>
+                  <span className={styles.sectionLabel}>开会前检查</span>
                   <p className={styles.secondaryText}>
                     {preflightReady
-                      ? "Passed before room creation."
-                      : "Room started without clearing the room-start gate."}
+                      ? "已通过 preflight。"
+                      : "未通过 preflight 直接开会（advisory 模式）。"}
                   </p>
                 </div>
               ) : null}
               {recommendedSurface ? (
                 <div>
-                  <span className={styles.sectionLabel}>Recommended surface</span>
+                  <span className={styles.sectionLabel}>建议入口</span>
                   <p className={styles.secondaryText}>
                     {formatToken(recommendedSurface)}
                   </p>
@@ -329,20 +329,20 @@ export function RoomPage() {
               ) : null}
               {plannerTarget ? (
                 <div>
-                  <span className={styles.sectionLabel}>Planner target</span>
+                  <span className={styles.sectionLabel}>规划器路由</span>
                   <p className={styles.secondaryText}>{plannerTarget}</p>
                 </div>
               ) : null}
               {executorTargets ? (
                 <div>
-                  <span className={styles.sectionLabel}>Executor targets</span>
+                  <span className={styles.sectionLabel}>执行器路由</span>
                   <p className={styles.secondaryText}>{executorTargets}</p>
                 </div>
               ) : null}
             </div>
             {operatorContractSections.length === 0 ? (
               <p className={styles.reason}>
-                No explicit entry-scope contract was persisted for this room.
+                本会议未记录显式的入口契约。
               </p>
             ) : (
               operatorContractSections.map((section) => (
@@ -358,7 +358,9 @@ export function RoomPage() {
             )}
             {missingOperatorInputs.length > 0 ? (
               <div className={styles.contractSection}>
-                <span className={styles.sectionLabel}>Missing operator inputs</span>
+                <span className={styles.sectionLabel}>
+                  规划器提到的开放问题（智能体会在会中主动问你）
+                </span>
                 <ul className={styles.questionList}>
                   {missingOperatorInputs.map((item) => (
                     <li key={item}>{item}</li>
@@ -369,7 +371,7 @@ export function RoomPage() {
           </section>
 
           <section className={styles.panelCard}>
-            <h3>Central MAS</h3>
+            <h3>中心化 MAS</h3>
             <div className={styles.topologyStrip}>
               <RoleAvatar role="host" roleDirectory={roleDirectory} />
               <span />
@@ -403,10 +405,10 @@ export function RoomPage() {
           </section>
 
           <section className={styles.panelCard}>
-            <h3>Current turn plan</h3>
+            <h3>本轮发言安排</h3>
             {snapshot.current_turns.length === 0 ? (
               <p className={styles.reason}>
-                The host has not published a structured turn plan yet.
+                主持人尚未发布结构化的发言计划。
               </p>
             ) : (
               <div className={styles.turnList}>
@@ -415,7 +417,7 @@ export function RoomPage() {
                     <div className={styles.turnRole}>
                       {resolveRoleLabel(turn.role, roleDirectory)}
                     </div>
-                    <p className={styles.turnTask}>{turn.task}</p>
+                    <p className={styles.turnTask}>{turn.task || "由该角色契约自主决定内容"}</p>
                   </div>
                 ))}
               </div>
@@ -423,10 +425,10 @@ export function RoomPage() {
           </section>
 
           <section className={styles.panelCard}>
-            <h3>Planned specialists</h3>
+            <h3>候选角色智能体</h3>
             {plannedSpecialists.length === 0 ? (
               <p className={styles.reason}>
-                No pre-room specialist roster is available in the snapshot.
+                本会议快照里没有预登记的角色名册。
               </p>
             ) : (
               <div className={styles.rosterList}>
@@ -448,7 +450,7 @@ export function RoomPage() {
                     ) : null}
                     {specialist.focusAreas.length > 0 ? (
                       <p className={styles.rosterMeta}>
-                        Focus: {specialist.focusAreas.join(" · ")}
+                        关注：{specialist.focusAreas.join(" · ")}
                       </p>
                     ) : null}
                   </div>
@@ -458,7 +460,7 @@ export function RoomPage() {
           </section>
 
           <section className={styles.panelCard}>
-            <h3>Participants</h3>
+            <h3>参与者</h3>
             <div className={styles.participantList}>
               {snapshot.participants.map((participant) => (
                 <div
@@ -479,7 +481,7 @@ export function RoomPage() {
                     </div>
                   </div>
                   <span className={styles.participantStatus}>
-                    {participant.activation || (participant.speaking ? "speaking" : "attached")}
+                    {participant.activation || (participant.speaking ? "发言中" : "已加入")}
                   </span>
                 </div>
               ))}
@@ -489,14 +491,14 @@ export function RoomPage() {
 
         <section className={styles.transcriptPanel}>
           <div className={styles.panelHeader}>
-            <h3>Live Transcript</h3>
+            <h3>实时讨论</h3>
             {snapshot.status === "ended" ? (
               <button
                 className={styles.secondaryButton}
                 onClick={() => navigate(`/rooms/${snapshot.room_id}/results`)}
                 type="button"
               >
-                View results
+                查看决策结果
               </button>
             ) : null}
           </div>
@@ -525,11 +527,11 @@ export function RoomPage() {
               <article className={styles.pendingCard} key={item.messageId}>
                 <div className={styles.messageHeader}>
                   <span className={styles.avatarFallback} data-role="system">
-                    ST
+                    ··
                   </span>
                   <div className={styles.messageIdentity}>
                     <div className={styles.messageTitleRow}>
-                      <strong>Streaming</strong>
+                      <strong>正在输出…</strong>
                       <span className={styles.eventPill}>message.chunk</span>
                     </div>
                   </div>
@@ -542,38 +544,38 @@ export function RoomPage() {
 
         <aside className={styles.sidePanel}>
           <section className={styles.panelCard}>
-            <h3>Conclusion contract</h3>
+            <h3>结论契约</h3>
             <p className={styles.focus}>{conclusionType}</p>
             <p className={styles.reason}>
-              {conclusionReason || "The meeting has not published a conclusion contract yet."}
+              {conclusionReason || "会议尚未给出最终结论契约。"}
             </p>
           </section>
 
           <section className={styles.panelCard}>
-            <h3>Convergence</h3>
+            <h3>收敛信号</h3>
             <dl className={styles.metricGrid}>
               <div>
-                <dt>Score</dt>
+                <dt>综合分</dt>
                 <dd>{snapshot.consensus.score.toFixed(2)}</dd>
               </div>
               <div>
-                <dt>Support</dt>
+                <dt>支持度</dt>
                 <dd>{snapshot.consensus.support.toFixed(2)}</dd>
               </div>
               <div>
-                <dt>Confidence</dt>
+                <dt>信心</dt>
                 <dd>{snapshot.consensus.confidence.toFixed(2)}</dd>
               </div>
               <div>
-                <dt>Disagreement</dt>
+                <dt>分歧度</dt>
                 <dd>{snapshot.consensus.disagreement_index.toFixed(2)}</dd>
               </div>
             </dl>
-            <p className={styles.reason}>{snapshot.consensus.reason || "Waiting for consensus check"}</p>
+            <p className={styles.reason}>{snapshot.consensus.reason || "等待收敛检测…"}</p>
           </section>
 
           <section className={styles.panelCard}>
-            <h3>Human intervention</h3>
+            <h3>人类介入</h3>
             {humanInterventionNotice ? (
               <p
                 className={
@@ -584,7 +586,7 @@ export function RoomPage() {
               </p>
             ) : null}
             <label className={styles.field}>
-              <span>Message</span>
+              <span>对会议室说</span>
               <textarea
                 disabled={roomEnded || humanMessageMutation.isPending}
                 rows={4}
@@ -593,7 +595,7 @@ export function RoomPage() {
                   humanMessageMutation.reset();
                   setHumanMessage(event.target.value);
                 }}
-                placeholder="Inject a question, constraint, or correction into the room."
+                placeholder="补充上下文、回答智能体的提问、追加约束条件…"
               />
             </label>
             <button
@@ -606,11 +608,11 @@ export function RoomPage() {
               onClick={() => humanMessageMutation.mutate(humanMessage)}
               type="button"
             >
-              {humanMessageMutation.isPending ? "Sending..." : "Send message"}
+              {humanMessageMutation.isPending ? "发送中…" : "发送给会议室"}
             </button>
 
             <label className={styles.field}>
-              <span>Override</span>
+              <span>强制结束理由</span>
               <textarea
                 disabled={roomEnded || humanOverrideMutation.isPending}
                 rows={3}
@@ -631,7 +633,7 @@ export function RoomPage() {
               onClick={() => humanOverrideMutation.mutate(overrideText)}
               type="button"
             >
-              {humanOverrideMutation.isPending ? "Applying..." : "Override and end"}
+              {humanOverrideMutation.isPending ? "正在结束…" : "强制结束会议"}
             </button>
           </section>
         </aside>

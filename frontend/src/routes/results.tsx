@@ -29,7 +29,7 @@ export function ResultsPage() {
   const snapshot = roomQuery.data;
   const plannedSpecialists = readPlannedSpecialists(snapshot);
   const roleDirectory = buildRoleDirectory(snapshot, plannedSpecialists);
-  const conclusionType = formatToken(snapshot.conclusion_type || "pending");
+  const conclusionType = formatToken(snapshot.conclusion_type || "pending（进行中）");
   const conclusionReason =
     snapshot.conclusion_reason || snapshot.ended_reason || snapshot.consensus.reason;
   const entryScope = readOperatorContextValue(snapshot, "entry_scope");
@@ -43,35 +43,35 @@ export function ResultsPage() {
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <p className={styles.kicker}>Meeting result · {conclusionType}</p>
+        <p className={styles.kicker}>会议决策结果 · {conclusionType}</p>
         <h2>{snapshot.topic}</h2>
-        <p>{conclusionReason || "The meeting has not published an explicit conclusion yet."}</p>
+        <p>{conclusionReason || "会议尚未发布显式结论。"}</p>
         <p className={styles.requirement}>
-          Requirement: {snapshot.requirement || "No original requirement recorded."}
+          原始需求：{snapshot.requirement || "未记录原始需求。"}
         </p>
       </header>
 
       <section className={styles.resultGrid}>
         <article className={styles.card}>
-          <h3>Conclusion Contract</h3>
+          <h3>结论契约</h3>
           <p className={styles.decision}>{conclusionType}</p>
           <p className={styles.metaCopy}>
-            {conclusionReason || "No explicit conclusion reason recorded yet."}
+            {conclusionReason || "尚未记录显式结论原因。"}
           </p>
         </article>
 
         <article className={styles.card}>
-          <h3>Decision Candidate</h3>
+          <h3>决策候选</h3>
           <p className={styles.decision}>
-            {snapshot.candidate_decision || "No candidate decision recorded yet."}
+            {snapshot.candidate_decision || "尚无候选决策。"}
           </p>
         </article>
 
         <article className={styles.card}>
-          <h3>Action Items</h3>
+          <h3>行动项</h3>
           <ul className={styles.list}>
             {snapshot.action_items.length === 0 ? (
-              <li>No action items yet.</li>
+              <li>尚无行动项。</li>
             ) : (
               snapshot.action_items.map((item) => <li key={item}>{item}</li>)
             )}
@@ -79,10 +79,10 @@ export function ResultsPage() {
         </article>
 
         <article className={styles.card}>
-          <h3>Open Questions</h3>
+          <h3>开放问题</h3>
           <ul className={styles.list}>
             {snapshot.open_questions.length === 0 ? (
-              <li>No open questions remain.</li>
+              <li>所有开放问题都已闭环。</li>
             ) : (
               snapshot.open_questions.map((item) => <li key={item}>{item}</li>)
             )}
@@ -90,34 +90,34 @@ export function ResultsPage() {
         </article>
 
         <article className={styles.card}>
-          <h3>Pre-room Contract</h3>
+          <h3>会前契约</h3>
           {entryScope ? (
             <p className={styles.metaCopy}>
-              Entry scope: {formatToken(entryScope)}
+              入口范围：{formatToken(entryScope)}
             </p>
           ) : null}
           {preflightReady !== null ? (
             <p className={styles.metaCopy}>
-              Room start gate:{" "}
+              开会前检查：
               {preflightReady
-                ? "passed before room creation."
-                : "room opened without clearing the room-start gate."}
+                ? "已通过 preflight。"
+                : "未通过 preflight 直接开会（advisory 模式）。"}
             </p>
           ) : null}
           {recommendedSurface ? (
             <p className={styles.metaCopy}>
-              Recommended surface: {formatToken(recommendedSurface)}
+              建议入口：{formatToken(recommendedSurface)}
             </p>
           ) : null}
           {plannerTarget ? (
-            <p className={styles.metaCopy}>Planner target: {plannerTarget}</p>
+            <p className={styles.metaCopy}>规划器路由：{plannerTarget}</p>
           ) : null}
           {executorTargets ? (
-            <p className={styles.metaCopy}>Executor targets: {executorTargets}</p>
+            <p className={styles.metaCopy}>执行器路由：{executorTargets}</p>
           ) : null}
           {contractSections.length === 0 ? (
             <p className={styles.metaCopy}>
-              No explicit entry-scope contract was persisted for this room.
+              本会议未记录显式的入口契约。
             </p>
           ) : (
             <div className={styles.contractSections}>
@@ -135,7 +135,7 @@ export function ResultsPage() {
           )}
           {missingOperatorInputs.length > 0 ? (
             <div className={styles.contractSection}>
-              <p className={styles.sectionLabel}>Missing operator inputs</p>
+              <p className={styles.sectionLabel}>规划器提到的开放问题</p>
               <ul className={styles.list}>
                 {missingOperatorInputs.map((item) => (
                   <li key={item}>{item}</li>
@@ -148,9 +148,9 @@ export function ResultsPage() {
 
       <div className={styles.timeline}>
         <div className={styles.timelineHeader}>
-          <h3>Replay Timeline</h3>
+          <h3>事件流回放</h3>
           <Link className={styles.link} to={`/rooms/${snapshot.room_id}`}>
-            Return to live room
+            回到实时房间
           </Link>
         </div>
         {snapshot.transcript.map((entry) => (

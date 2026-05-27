@@ -7,8 +7,11 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
     <div className={styles.shell}>
       <header className={styles.header}>
         <div>
-          <p className={styles.eyebrow}>Decision Room</p>
-          <h1 className={styles.title}>Real-Time Multi-Agent Meeting Room</h1>
+          <p className={styles.eyebrow}>Meetkat · 决策会议室</p>
+          <h1 className={styles.title}>
+            实时多智能体协同决策室
+            <span className={styles.titleAccent}>Central MAS</span>
+          </h1>
         </div>
         <nav className={styles.nav}>
           <NavLink
@@ -17,7 +20,7 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
             }
             to="/"
           >
-            Rooms
+            房间列表
           </NavLink>
         </nav>
       </header>
@@ -38,14 +41,10 @@ export function RootHydrateFallback() {
   return (
     <ShellFrame>
       <section className={styles.fallbackCard}>
-        <p className={styles.fallbackEyebrow}>Hydrating room state</p>
-        <h2 className={styles.fallbackTitle}>
-          Loading the authoritative room snapshot.
-        </h2>
+        <p className={styles.fallbackEyebrow}>正在恢复房间状态</p>
+        <h2 className={styles.fallbackTitle}>等待事件流权威快照加载</h2>
         <p className={styles.fallbackCopy}>
-          Room UI stays bound to the journal-backed read model, so the first
-          render waits for the data-router state instead of guessing from local
-          placeholders.
+          房间界面始终绑定到 journal-backed 读模型，首次渲染会先等真实数据，不用本地占位猜测。
         </p>
       </section>
     </ShellFrame>
