@@ -113,6 +113,51 @@ class SupervisorPlan:
         return self.speakers
 
 
+_PRESCRIPTION_VERB_EN_PATTERN = re.compile(
+    r"\b(argue|claim|conclude|recommend|propose|advocate|insist|demand)\b",
+    re.IGNORECASE,
+)
+# Chinese characters are not regex word characters, so the English \b anchor
+# does not catch CJK prescriptive verbs. Substring detection is sufficient
+# because these tokens are distinctive enough that any embed is a real
+# prescription, and false positives only cost an optional hint.
+_PRESCRIPTION_VERB_ZH_TOKENS = (
+    "主张",
+    "论证",
+    "得出结论",
+    "结论是",
+    "建议",
+    "提议",
+    "坚持",
+    "要求",
+    "断言",
+    "应该认为",
+    "应该说",
+    "应该主张",
+)
+
+
+def sanitize_focus_angle(value: str) -> str:
+    """Strip any focus_angle that descends into content prescription.
+
+    The supervisor's job is to set WHO speaks WHEN. ``focus_angle`` is an
+    optional one-line hint about ANGLE OF ATTACK, never about the claim
+    or conclusion the specialist must reach. If the supervisor emits a
+    string containing prescriptive verbs (argue / claim / conclude /
+    recommend / propose / advocate / insist / demand or their Chinese
+    equivalents), drop it so the specialist's autonomy stays intact.
+    """
+    text = (value or "").strip()
+    if not text:
+        return ""
+    if _PRESCRIPTION_VERB_EN_PATTERN.search(text):
+        return ""
+    for token in _PRESCRIPTION_VERB_ZH_TOKENS:
+        if token in text:
+            return ""
+    return text
+
+
 _STANCE_BY_ROLE = {
     "implementation_specialist": "feasibility",
     "risk_specialist": "risk",
@@ -271,7 +316,7 @@ def parse_supervisor_plan(
         if not agent or agent not in allowed_roles or agent in seen:
             continue
         run = bool(item.get("run", True))
-        focus_angle = str(item.get("focus_angle", "")).strip()
+        focus_angle = sanitize_focus_angle(str(item.get("focus_angle", "")))
         order_value = item.get("order")
         try:
             order = int(order_value) if order_value is not None else index

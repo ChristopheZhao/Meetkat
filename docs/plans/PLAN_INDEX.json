@@ -249,6 +249,29 @@
       ]
     },
     {
+      "id": "PLAN-20260513-008",
+      "title": "Audit-fix: journal-anchored memory + per-role lessons + supervisor self-memory + focus_angle guard",
+      "kind": "fix",
+      "status": "completed",
+      "priority": "P1",
+      "owner": "codex",
+      "file_path": "docs/plans/active/PLAN-20260513-008.md",
+      "confirmed_by_user": true,
+      "created_at": "2026-05-27T05:00:00Z",
+      "updated_at": "2026-05-27T06:00:00Z",
+      "archived_at": null,
+      "notes": [
+        {
+          "at": "2026-05-27T05:00:00Z",
+          "text": "Created after post-delivery self-audit of PLAN-007 found 4 architecture gaps: (1) memory writes bypass RoomEventJournal (breaks baseline §2.5 single-SoT discipline), (2) per-role lessons were identical broadcast text (fake learning), (3) supervisor never wrote its own decision_focus to memory (failing recall), (4) focus_angle had no parse-time guard against content-prescription verbs."
+        },
+        {
+          "at": "2026-05-27T06:00:00Z",
+          "text": "All 4 fixes shipped + 12 new regression tests + real-LLM smoke validated all 4 behaviors end-to-end. RoomMemoryStore.apply_journal_event lets the store be rebuilt from journal replay. CentralizedMASExecutor._emit_memory_write routes through publish() when a runtime callback is provided. Per-role lessons now anchor to each role's last claim. Supervisor writes latest_supervisor_plan + supervisor.plan event each round. sanitize_focus_angle strips 12 prescriptive forms across English and Chinese. 110 backend / 10 frontend tests green."
+        }
+      ]
+    },
+    {
       "id": "PLAN-20260513-007",
       "title": "Native-agent autonomy + memory system + Chinese UI",
       "kind": "feature",

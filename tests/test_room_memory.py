@@ -190,8 +190,9 @@ class PersistMeetingLessonsTests(unittest.TestCase):
 
     def test_persists_one_lesson_per_specialist_role_in_transcript(self) -> None:
         class _Entry:
-            def __init__(self, role: str) -> None:
+            def __init__(self, role: str, artifacts: dict | None = None) -> None:
                 self.role = role
+                self.artifacts = artifacts or {}
 
         class _Snap:
             candidate_decision = "Adopt a phased rollout starting with cohort A."
@@ -201,8 +202,14 @@ class PersistMeetingLessonsTests(unittest.TestCase):
             goal = "decide rollout"
             transcript = [
                 _Entry("host"),
-                _Entry("implementation_specialist"),
-                _Entry("risk_specialist"),
+                _Entry(
+                    "implementation_specialist",
+                    {"claim": "phase by cohort to limit blast radius", "confidence": 0.82},
+                ),
+                _Entry(
+                    "risk_specialist",
+                    {"claim": "rollback path must be auto-validated per phase", "confidence": 0.74},
+                ),
                 _Entry("synthesis"),
                 _Entry("system"),
             ]
@@ -214,9 +221,6 @@ class PersistMeetingLessonsTests(unittest.TestCase):
         )
         roles = sorted(lesson.role for lesson in persisted)
         self.assertEqual(roles, ["implementation_specialist", "risk_specialist"])
-        impl = self.long_store.recent("implementation_specialist")
-        self.assertEqual(len(impl), 1)
-        self.assertIn("phased rollout", impl[0].text)
 
     def test_skips_when_no_decision_candidate(self) -> None:
         class _Snap:
@@ -229,6 +233,153 @@ class PersistMeetingLessonsTests(unittest.TestCase):
             long_term_store=self.long_store,
         )
         self.assertEqual(persisted, [])
+
+    def test_lesson_text_is_per_role_not_broadcast(self) -> None:
+        """Regression: lesson text used to be identical across all roles
+        (the decision-record broadcast). Each role should carry ITS OWN
+        claim so future recall represents per-role learning."""
+
+        class _Entry:
+            def __init__(self, role: str, artifacts: dict | None = None) -> None:
+                self.role = role
+                self.artifacts = artifacts or {}
+
+        class _Snap:
+            candidate_decision = "Decide rollout phasing"
+            conclusion_type = "decision_ready"
+            conclusion_reason = "Specialists aligned on phasing"
+            current_focus = ""
+            goal = ""
+            transcript = [
+                _Entry(
+                    "implementation_specialist",
+                    {"claim": "implementation favors per-cohort rollout", "confidence": 0.81},
+                ),
+                _Entry(
+                    "risk_specialist",
+                    {"claim": "risk demands an auto-rollback validator", "confidence": 0.73},
+                ),
+            ]
+
+        persisted = persist_meeting_lessons_from_snapshot(
+            room_id="room_per_role",
+            snapshot=_Snap(),
+            long_term_store=self.long_store,
+        )
+        by_role = {lesson.role: lesson.text for lesson in persisted}
+        self.assertIn("per-cohort rollout", by_role["implementation_specialist"])
+        self.assertIn("auto-rollback validator", by_role["risk_specialist"])
+        self.assertNotEqual(
+            by_role["implementation_specialist"],
+            by_role["risk_specialist"],
+            "per-role lesson text must differ — no broadcast",
+        )
+
+    def test_lesson_text_falls_back_to_broadcast_when_no_claim(self) -> None:
+        class _Entry:
+            def __init__(self, role: str) -> None:
+                self.role = role
+                self.artifacts = {}
+
+        class _Snap:
+            candidate_decision = "Defer decision until inputs arrive"
+            conclusion_type = "follow_up_required"
+            conclusion_reason = "missing operator inputs"
+            current_focus = ""
+            goal = ""
+            transcript = [_Entry("implementation_specialist")]
+
+        persisted = persist_meeting_lessons_from_snapshot(
+            room_id="room_fb",
+            snapshot=_Snap(),
+            long_term_store=self.long_store,
+            speakers=["implementation_specialist"],
+        )
+        self.assertEqual(len(persisted), 1)
+        self.assertIn("Defer decision", persisted[0].text)
+
+
+class ApplyJournalEventTests(unittest.TestCase):
+    """B1 regression: RoomMemoryStore.apply_journal_event must update local
+    state from a journal-shaped payload so the store can be rebuilt by
+    replaying the RoomEventJournal (single SoT discipline)."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.store = RoomMemoryStore(storage_dir=Path(self._tmp.name))
+
+    def test_apply_fact_payload_updates_state(self) -> None:
+        self.store.apply_journal_event(
+            {
+                "scope": mas_scope("room_apply"),
+                "fact_key": "latest_supervisor_plan",
+                "fact_value": {"round_index": 1, "decision_focus": "x"},
+            },
+            "room_apply",
+        )
+        value = self.store.read_fact(
+            "room_apply", mas_scope("room_apply"), "latest_supervisor_plan"
+        )
+        self.assertEqual(value["decision_focus"], "x")
+
+    def test_apply_event_payload_appends_event(self) -> None:
+        for index in range(3):
+            self.store.apply_journal_event(
+                {
+                    "scope": mas_scope("room_apply"),
+                    "memory_event_type": "specialist.claim",
+                    "memory_event_payload": {"role": "risk_specialist", "i": index},
+                },
+                "room_apply",
+            )
+        events = self.store.recent_events("room_apply", mas_scope("room_apply"))
+        self.assertEqual(len(events), 3)
+        self.assertEqual(events[0].event_type, "specialist.claim")
+
+    def test_apply_skips_payload_without_scope(self) -> None:
+        # No-op, no exception
+        self.store.apply_journal_event({}, "room_apply")
+        self.store.apply_journal_event({"scope": ""}, "room_apply")
+        self.assertEqual(self.store.all_facts("room_apply", mas_scope("room_apply")), {})
+
+    def test_replay_via_apply_reconstructs_identical_state(self) -> None:
+        # Original write path
+        self.store.write_fact("room_r", mas_scope("room_r"), "k1", {"v": 1})
+        self.store.record_event(
+            "room_r", mas_scope("room_r"), "specialist.claim", {"role": "x"}
+        )
+        original = self.store.snapshot("room_r")
+
+        # Rebuild a fresh store from journal-shaped payloads only
+        replay = RoomMemoryStore(storage_dir=Path(self._tmp.name) / "replay")
+        replay.apply_journal_event(
+            {
+                "scope": mas_scope("room_r"),
+                "fact_key": "k1",
+                "fact_value": {"v": 1},
+            },
+            "room_r",
+        )
+        replay.apply_journal_event(
+            {
+                "scope": mas_scope("room_r"),
+                "memory_event_type": "specialist.claim",
+                "memory_event_payload": {"role": "x"},
+            },
+            "room_r",
+        )
+        rebuilt = replay.snapshot("room_r")
+        # Fact dict matches
+        self.assertEqual(
+            original[mas_scope("room_r")]["facts"]["k1"]["value"],
+            rebuilt[mas_scope("room_r")]["facts"]["k1"]["value"],
+        )
+        # Event type matches
+        self.assertEqual(
+            original[mas_scope("room_r")]["events"][0]["event_type"],
+            rebuilt[mas_scope("room_r")]["events"][0]["event_type"],
+        )
 
 
 class MemoryEnvOverrideTests(unittest.TestCase):

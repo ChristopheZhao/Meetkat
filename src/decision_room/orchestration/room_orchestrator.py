@@ -31,8 +31,21 @@ class RoomOrchestrator:
         self._executor = executor
         self._config = config or RoomOrchestratorConfig()
 
-    async def build_round(self, snapshot: RoomSnapshot, round_index: int) -> RoomRound:
-        return await self._executor.build_round(snapshot, round_index)
+    async def build_round(
+        self,
+        snapshot: RoomSnapshot,
+        round_index: int,
+        *,
+        publish: PublishCallable | None = None,
+    ) -> RoomRound:
+        executor = self._executor
+        build = executor.build_round
+        # Executors that opt into journal-anchored memory accept ``publish``;
+        # legacy executors are kept compatible via TypeError fallback.
+        try:
+            return await build(snapshot, round_index, publish=publish)
+        except TypeError:
+            return await build(snapshot, round_index)
 
     async def emit_round(
         self,

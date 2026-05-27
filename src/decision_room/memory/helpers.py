@@ -76,15 +76,20 @@ def persist_meeting_lessons_from_snapshot(
     snapshot: Any,
     speakers: Iterable[str] | None = None,
     long_term_store: LongTermLessonStore,
-    max_lesson_chars: int = 400,
+    max_lesson_chars: int = 480,
 ) -> list[LongTermLesson]:
     """Write one lesson per participating specialist role from a closed room.
 
-    Heuristic: lesson text = decision candidate (truncated) + one-line
-    conclusion reason. Each lesson is tagged with the room_id, decision
-    focus, candidate text, and conclusion_type for future recall ranking.
-    Returns the persisted lessons (may be empty if there is no decision
-    candidate or no speakers).
+    Per-role lesson semantics: lesson text is anchored to that role's most
+    recent claim found in the transcript, plus a short reference to the
+    meeting decision and conclusion type. This makes ``role_lessons`` in
+    a future ``memory_recall`` block represent "what this role actually
+    argued and how it landed" rather than just rebroadcasting the shared
+    decision record under N filenames.
+
+    Falls back to the decision-record broadcast (the older behaviour) only
+    when the transcript does not expose a per-role claim — e.g., a meeting
+    that ended before any specialist spoke.
     """
     candidate = _normalize_text(getattr(snapshot, "candidate_decision", ""))
     if not candidate:
@@ -94,27 +99,59 @@ def persist_meeting_lessons_from_snapshot(
     focus = _normalize_text(getattr(snapshot, "current_focus", "")) or _normalize_text(
         getattr(snapshot, "goal", "")
     )
-    if not speakers:
-        # Fall back to transcript participants of role kind != host/synthesis/system/human.
-        transcript = getattr(snapshot, "transcript", []) or []
-        seen: list[str] = []
+
+    transcript = getattr(snapshot, "transcript", []) or []
+    role_claims: dict[str, dict[str, Any]] = {}
+    for entry in transcript:
+        role = getattr(entry, "role", "") or ""
+        if role in {"host", "synthesis", "system", "human"} or not role:
+            continue
+        artifacts = getattr(entry, "artifacts", None)
+        if not isinstance(artifacts, dict):
+            continue
+        claim = _normalize_text(artifacts.get("claim"))
+        if not claim:
+            continue
+        try:
+            confidence = float(artifacts.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        # Keep the LAST claim per role — later iterations overwrite.
+        role_claims[role] = {"claim": claim, "confidence": confidence}
+
+    if speakers is None:
+        target_roles = list(role_claims.keys())
+        # Cover roles that participated but did not get a claim parsed:
+        # walk transcript order so output ordering is deterministic.
         for entry in transcript:
             role = getattr(entry, "role", "") or ""
-            if role in {"host", "synthesis", "system", "human"} or not role:
-                continue
-            if role in seen:
-                continue
-            seen.append(role)
-        speakers = seen
+            if (
+                role
+                and role not in {"host", "synthesis", "system", "human"}
+                and role not in target_roles
+            ):
+                target_roles.append(role)
+    else:
+        target_roles = [role for role in speakers if role]
+
     persisted: list[LongTermLesson] = []
-    text = candidate
+    broadcast_fallback = candidate
     if conclusion_reason:
-        text = f"{candidate} — {conclusion_reason}"
-    if len(text) > max_lesson_chars:
-        text = text[: max_lesson_chars - 1].rstrip() + "…"
-    for role in speakers:
+        broadcast_fallback = f"{candidate} — {conclusion_reason}"
+    for role in target_roles:
         if not role or not role.strip():
             continue
+        role_info = role_claims.get(role)
+        if role_info:
+            text = (
+                f"作为 {role}，我主张：{role_info['claim']}"
+                f"（信心 {role_info['confidence']:.2f}）。"
+                f"本会议候选决策：{candidate}"
+            )
+        else:
+            text = broadcast_fallback
+        if len(text) > max_lesson_chars:
+            text = text[: max_lesson_chars - 1].rstrip() + "…"
         lesson = LongTermLesson(
             role=role,
             text=text,

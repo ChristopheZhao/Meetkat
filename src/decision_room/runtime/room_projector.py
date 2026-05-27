@@ -1,18 +1,34 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Protocol
 
 from .events import EventEnvelope
 from .room_models import ConsensusState, Participant, RoomSnapshot, TranscriptEntry
 
 
-class RoomProjector:
-    """Projects the room event log into a frontend-friendly snapshot."""
+class _MemoryStoreLike(Protocol):
+    def apply_journal_event(self, payload: dict[str, Any], room_id: str) -> None:
+        ...
 
-    def __init__(self, room_id: str) -> None:
+
+class RoomProjector:
+    """Projects the room event log into a frontend-friendly snapshot.
+
+    Optionally also routes ``memory.write`` journal events into a
+    ``RoomMemoryStore`` so the store stays a true projection of the journal
+    (single SoT discipline from MAS-harness-architecture-baseline §2.5).
+    """
+
+    def __init__(
+        self,
+        room_id: str,
+        memory_store: _MemoryStoreLike | None = None,
+    ) -> None:
         self.snapshot = RoomSnapshot(room_id=room_id)
         self._seen_event_ids: set[str] = set()
         self._pending_chunks: dict[str, str] = {}
+        self._memory_store = memory_store
+        self._room_id = room_id
 
     def apply(self, event: EventEnvelope) -> RoomSnapshot:
         if event.event_id in self._seen_event_ids:
@@ -43,8 +59,20 @@ class RoomProjector:
             self._apply_structured_note(event)
         elif event.event_type == "meeting.ended":
             self._apply_meeting_ended(event)
+        elif event.event_type == "memory.write":
+            self._apply_memory_write(event)
 
         return snapshot
+
+    def _apply_memory_write(self, event: EventEnvelope) -> None:
+        if self._memory_store is None:
+            return
+        try:
+            self._memory_store.apply_journal_event(event.payload, self._room_id)
+        except Exception:
+            # Memory projection is a best-effort denormalization; do not let
+            # store errors poison snapshot projection.
+            return
 
     def _apply_room_started(self, event: EventEnvelope) -> None:
         payload = event.payload

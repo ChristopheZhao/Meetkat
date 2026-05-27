@@ -150,7 +150,13 @@ class CentralizedMASExecutor:
             ),
         )
 
-    async def build_round(self, snapshot: Any, round_index: int) -> RoomRound:
+    async def build_round(
+        self,
+        snapshot: Any,
+        round_index: int,
+        *,
+        publish: Any = None,
+    ) -> RoomRound:
         runner = self._specialist_runner
         phase = runner._phase_for_round(snapshot, round_index)  # noqa: SLF001
         routing_signals = runner._signals_for_round(snapshot, round_index)  # noqa: SLF001
@@ -173,6 +179,15 @@ class CentralizedMASExecutor:
             next_focus=next_focus,
             route_ctx=route_ctx,
             route=route,
+        )
+        # B3: supervisor self-memory — write decision_focus / reason /
+        # speakers to shared scope so the next-round supervisor's
+        # memory_recall surfaces what it decided last round.
+        await self._record_supervisor_plan(
+            publish=publish,
+            room_id=snapshot.room_id,
+            round_index=round_index,
+            plan=supervisor_plan,
         )
         host_agenda = supervisor_plan_to_host_agenda(supervisor_plan)
         runnable = supervisor_plan.runnable_speakers()
@@ -205,6 +220,9 @@ class CentralizedMASExecutor:
                 room_store=self._room_memory,
                 long_term_store=self._long_term,
             )
+            # Pass the publish callback into the local-write path so the
+            # next iteration's recall sees the prior speaker's claim via
+            # journal-anchored projection.
             # The supervisor only provides an optional ``focus_angle`` hint —
             # the specialist authors its own claim, evidence, and confidence.
             # We pass the hint through ``turn_task`` for backward signature
@@ -232,10 +250,12 @@ class CentralizedMASExecutor:
                 )
             )
             target_claim_ref = output.claim
-            # Persist this specialist's claim to shared room memory and to
-            # the agent's own scratchpad so subsequent rounds see it as part
-            # of memory_recall.
-            self._record_specialist_memory(
+            # Persist this specialist's claim. When a journal publish callback
+            # is supplied, writes go through memory.write events so the
+            # RoomEventJournal stays single SoT and the local store updates
+            # via projector dispatch (RoomProjector._apply_memory_write).
+            await self._record_specialist_memory(
+                publish=publish,
                 room_id=room_id,
                 role=specialist.role,
                 round_index=round_index,
@@ -346,9 +366,10 @@ class CentralizedMASExecutor:
             synthesis_message=synthesis_message,
         )
 
-    def _record_specialist_memory(
+    async def _record_specialist_memory(
         self,
         *,
+        publish: Any,
         room_id: str,
         role: str,
         round_index: int,
@@ -360,39 +381,121 @@ class CentralizedMASExecutor:
         evidence = list(getattr(output, "evidence", []) or [])
         confidence = float(getattr(output, "confidence", 0.0) or 0.0)
         fact_key = f"latest_claim.{role}"
-        self._room_memory.write_fact(
-            room_id,
-            shared_scope,
-            fact_key,
-            {
+        shared_fact_value = {
+            "round_index": round_index,
+            "claim": claim,
+            "evidence": evidence,
+            "confidence": confidence,
+        }
+        shared_event_payload = {
+            "role": role,
+            "round_index": round_index,
+            "claim": claim,
+            "confidence": confidence,
+        }
+        local_fact_value = {
+            "round_index": round_index,
+            "claim": claim,
+            "evidence": evidence[:3],
+            "confidence": confidence,
+        }
+        await self._emit_memory_write(
+            publish=publish,
+            room_id=room_id,
+            scope=shared_scope,
+            fact_key=fact_key,
+            fact_value=shared_fact_value,
+        )
+        await self._emit_memory_write(
+            publish=publish,
+            room_id=room_id,
+            scope=shared_scope,
+            event_type="specialist.claim",
+            event_payload=shared_event_payload,
+        )
+        await self._emit_memory_write(
+            publish=publish,
+            room_id=room_id,
+            scope=agent_scope_id,
+            fact_key="last_self_claim",
+            fact_value=local_fact_value,
+        )
+
+    async def _record_supervisor_plan(
+        self,
+        *,
+        publish: Any,
+        room_id: str,
+        round_index: int,
+        plan: SupervisorPlan,
+    ) -> None:
+        shared = mas_scope(room_id)
+        plan_payload = {
+            "round_index": round_index,
+            "phase": plan.phase.value,
+            "decision_focus": plan.decision_focus,
+            "current_focus": plan.current_focus,
+            "reason": plan.reason,
+            "open_questions": list(plan.open_questions),
+            "speakers": [item.to_payload() for item in plan.speakers],
+        }
+        await self._emit_memory_write(
+            publish=publish,
+            room_id=room_id,
+            scope=shared,
+            fact_key="latest_supervisor_plan",
+            fact_value=plan_payload,
+        )
+        await self._emit_memory_write(
+            publish=publish,
+            room_id=room_id,
+            scope=shared,
+            event_type="supervisor.plan",
+            event_payload={
                 "round_index": round_index,
-                "claim": claim,
-                "evidence": evidence,
-                "confidence": confidence,
+                "decision_focus": plan.decision_focus,
+                "speakers": [item.agent for item in plan.runnable_speakers()],
             },
         )
-        self._room_memory.record_event(
-            room_id,
-            shared_scope,
-            "specialist.claim",
-            {
-                "role": role,
-                "round_index": round_index,
-                "claim": claim,
-                "confidence": confidence,
-            },
-        )
-        self._room_memory.write_fact(
-            room_id,
-            agent_scope_id,
-            "last_self_claim",
-            {
-                "round_index": round_index,
-                "claim": claim,
-                "evidence": evidence[:3],
-                "confidence": confidence,
-            },
-        )
+
+    async def _emit_memory_write(
+        self,
+        *,
+        publish: Any,
+        room_id: str,
+        scope: str,
+        fact_key: str | None = None,
+        fact_value: Any = None,
+        event_type: str | None = None,
+        event_payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Publish a journal memory.write event (when ``publish`` is
+        provided) so the RoomEventJournal stays the single source of truth.
+        Falls back to direct store writes when no publish callable is
+        supplied (test / standalone harness mode)."""
+        payload: dict[str, Any] = {"scope": scope}
+        if fact_key:
+            payload["fact_key"] = fact_key
+            payload["fact_value"] = fact_value
+        if event_type:
+            payload["memory_event_type"] = event_type
+            payload["memory_event_payload"] = event_payload or {}
+        if publish is not None:
+            await publish(
+                room_id,
+                producer_id="memory.writer.1",
+                role="system",
+                event_type="memory.write",
+                payload=payload,
+            )
+            return
+        # Standalone fallback: write directly to local store. State will
+        # not be journal-anchored in this path, intended for unit tests
+        # that construct the executor without a runtime.
+        if fact_key:
+            self._room_memory.write_fact(room_id, scope, fact_key, fact_value)
+        if event_type:
+            self._room_memory.record_event(room_id, scope, event_type, event_payload or {})
 
     def _coordination_for_speakers(
         self,

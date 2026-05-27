@@ -601,5 +601,178 @@ class NativeAgentClarificationContractTests(unittest.TestCase):
         self.assertIn("room_state.last_human_message", system_prompt)
 
 
+class FocusAngleGuardTests(unittest.TestCase):
+    """B4 regression: focus_angle must never become a content-prescription
+    backdoor (supervisor orders WHO/WHEN, specialist owns WHAT)."""
+
+    def test_sanitize_strips_english_prescription_verbs(self) -> None:
+        from decision_room.orchestration.central_mas import sanitize_focus_angle
+
+        for prescriptive in [
+            "argue that event sourcing is overkill",
+            "claim the cost is prohibitive",
+            "conclude with a recommendation against migration",
+            "recommend phased rollout starting with cohort A",
+            "propose a hybrid model",
+            "advocate for the snapshot path",
+            "insist on backwards-compatibility",
+            "demand a rollback plan",
+        ]:
+            self.assertEqual(
+                sanitize_focus_angle(prescriptive),
+                "",
+                f"prescription should be stripped: {prescriptive!r}",
+            )
+
+    def test_sanitize_strips_chinese_prescription_verbs(self) -> None:
+        from decision_room.orchestration.central_mas import sanitize_focus_angle
+
+        for prescriptive in [
+            "建议采用事件源",
+            "主张分阶段推进",
+            "结论是放弃迁移",
+            "应该认为团队学习成本过高",
+        ]:
+            self.assertEqual(
+                sanitize_focus_angle(prescriptive), "",
+                f"中文 prescription 应被剥离: {prescriptive!r}",
+            )
+
+    def test_sanitize_preserves_legitimate_angle_hints(self) -> None:
+        from decision_room.orchestration.central_mas import sanitize_focus_angle
+
+        for legit in [
+            "lean into recovery semantics, not throughput",
+            "focus on day-two operational pain",
+            "consider the migration sequencing risk",
+            "侧重运营信号而非产品价值假设",
+        ]:
+            self.assertEqual(sanitize_focus_angle(legit), legit)
+
+    def test_parse_supervisor_plan_drops_prescriptive_focus_angle(self) -> None:
+        snapshot = _snapshot()
+        catalog = role_catalog_from_snapshot(snapshot)
+        payload = json.dumps(
+            {
+                "phase": "explore",
+                "speakers": [
+                    {
+                        "agent": "implementation_specialist",
+                        "run": True,
+                        "order": 1,
+                        "focus_angle": "argue that snapshot CRUD must stay",
+                    },
+                    {
+                        "agent": "risk_specialist",
+                        "run": True,
+                        "order": 2,
+                        "focus_angle": "lean into rollback and recovery surface",
+                    },
+                ],
+            }
+        )
+        plan = parse_supervisor_plan(
+            payload,
+            role_catalog=catalog,
+            phase=MeetingPhase.EXPLORE,
+            fallback_focus="fallback",
+        )
+        by_role = {slot.agent: slot.focus_angle for slot in plan.speakers}
+        self.assertEqual(by_role["implementation_specialist"], "")
+        self.assertEqual(
+            by_role["risk_specialist"],
+            "lean into rollback and recovery surface",
+        )
+
+
+class JournalAnchoredMemoryTests(unittest.IsolatedAsyncioTestCase):
+    """B1 regression: every per-round memory mutation MUST flow through a
+    ``memory.write`` journal event so the RoomEventJournal stays the single
+    source of truth and the store is a pure projection."""
+
+    async def test_specialist_and_supervisor_memory_writes_publish_journal_events(
+        self,
+    ) -> None:
+        from decision_room.orchestration.central_executor import CentralizedMASExecutor
+        from decision_room.providers import ProviderRegistry
+
+        provider = SupervisorScriptedProvider(
+            selected_roles=["implementation_specialist", "risk_specialist"]
+        )
+        registry = ProviderRegistry({"qwen": provider})
+        executor = CentralizedMASExecutor(
+            registry=registry,
+            router=_router(),
+            use_background_threads=False,
+        )
+        snapshot = _snapshot()
+
+        published: list[dict[str, str]] = []
+
+        async def fake_publish(room_id, *, producer_id, role, event_type, payload, **_):
+            published.append(
+                {
+                    "event_type": event_type,
+                    "scope": payload.get("scope"),
+                    "fact_key": payload.get("fact_key"),
+                    "memory_event_type": payload.get("memory_event_type"),
+                }
+            )
+            return {"event_type": event_type}
+
+        await executor.build_round(snapshot, round_index=1, publish=fake_publish)
+
+        memory_events = [item for item in published if item["event_type"] == "memory.write"]
+        self.assertTrue(memory_events, "expected at least one memory.write journal event")
+        # Supervisor self-memory writes
+        self.assertTrue(
+            any(item["fact_key"] == "latest_supervisor_plan" for item in memory_events),
+            "supervisor decision_focus must be persisted to mas scope",
+        )
+        self.assertTrue(
+            any(item["memory_event_type"] == "supervisor.plan" for item in memory_events)
+        )
+        # Per-specialist claim memory writes
+        self.assertTrue(
+            any(
+                item["fact_key"] == "latest_claim.implementation_specialist"
+                for item in memory_events
+            )
+        )
+        self.assertTrue(
+            any(
+                item["fact_key"] == "latest_claim.risk_specialist"
+                for item in memory_events
+            )
+        )
+        self.assertTrue(
+            any(item["memory_event_type"] == "specialist.claim" for item in memory_events)
+        )
+
+    async def test_no_publish_callable_falls_back_to_direct_store_write(self) -> None:
+        """Standalone executor (no runtime) still mutates the in-memory store
+        so unit tests and offline harnesses keep working."""
+        from decision_room.orchestration.central_executor import CentralizedMASExecutor
+        from decision_room.providers import ProviderRegistry
+
+        provider = SupervisorScriptedProvider(
+            selected_roles=["implementation_specialist", "risk_specialist"]
+        )
+        registry = ProviderRegistry({"qwen": provider})
+        executor = CentralizedMASExecutor(
+            registry=registry,
+            router=_router(),
+            use_background_threads=False,
+        )
+        snapshot = _snapshot()
+        await executor.build_round(snapshot, round_index=1)
+        # Direct store update happened via the fallback path
+        from decision_room.memory import mas_scope as _mas
+
+        facts = executor._room_memory.all_facts(snapshot.room_id, _mas(snapshot.room_id))  # noqa: SLF001
+        self.assertIn("latest_supervisor_plan", facts)
+        self.assertIn("latest_claim.implementation_specialist", facts)
+
+
 if __name__ == "__main__":
     unittest.main()

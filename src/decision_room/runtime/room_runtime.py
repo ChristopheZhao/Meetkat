@@ -150,7 +150,7 @@ class RoomRuntime:
         session = RoomSession(
             room_id=room_id,
             journal=RoomEventJournal(room_id),
-            projector=RoomProjector(room_id),
+            projector=RoomProjector(room_id, memory_store=self._room_memory),
         )
         async with self._lock:
             self._sessions[room_id] = session
@@ -418,7 +418,11 @@ class RoomRuntime:
                 if round_index > 1:
                     await asyncio.sleep(self._config.between_round_delay_sec)
 
-                round_data = await self._orchestrator.build_round(snapshot, round_index)
+                round_data = await self._orchestrator.build_round(
+                    snapshot,
+                    round_index,
+                    publish=self.publish,
+                )
                 await self._ensure_round_participants_joined(
                     room_id=room_id,
                     round_data=round_data,
