@@ -249,6 +249,29 @@
       ]
     },
     {
+      "id": "PLAN-20260513-011",
+      "title": "Decision record exporter + end-to-end case delivery + avatar regen path",
+      "kind": "feature",
+      "status": "completed",
+      "priority": "P1",
+      "owner": "codex",
+      "file_path": "docs/plans/active/PLAN-20260513-011.md",
+      "confirmed_by_user": true,
+      "created_at": "2026-05-28T04:00:00Z",
+      "updated_at": "2026-05-28T05:00:00Z",
+      "archived_at": null,
+      "notes": [
+        {
+          "at": "2026-05-28T04:00:00Z",
+          "text": "Created after user set continuation goal: end-to-end case + deliver decision document + image-gen avatars."
+        },
+        {
+          "at": "2026-05-28T05:00:00Z",
+          "text": "E1 decision record renderer + run_meeting_and_export.py shipped; ran microservice-boundary-decomposition case end-to-end across 3 LLM rounds (27695 byte markdown). E2 image-gen MCP not connected this session; documented per-role prompts + shared visual contract in frontend/src/assets/agents/README.md for one-shot regeneration when MCP comes online. Backend 121 / frontend 10 tests still green."
+        }
+      ]
+    },
+    {
       "id": "PLAN-20260513-010",
       "title": "Rule-base → LLM-base for role planner + coordination; frontend visibility + E2E",
       "kind": "feature",
