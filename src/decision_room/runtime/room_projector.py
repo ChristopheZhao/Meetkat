@@ -179,6 +179,16 @@ class RoomProjector:
         self.snapshot.open_questions = self._as_string_list(payload.get("open_questions"))
         self.snapshot.conclusion_type = str(payload.get("conclusion_type", ""))
         self.snapshot.conclusion_reason = str(payload.get("conclusion_reason", ""))
+        # LLM-recommended next-phase override (set on snapshot so the next
+        # round's ``_phase_for_round`` can honor it before falling back to
+        # the rule-based derivation).
+        recommended = str(payload.get("recommended_next_phase", "")).strip().lower()
+        if recommended in {"explore", "debate", "synthesize", "decide"}:
+            self.snapshot.recommended_next_phase = recommended
+        else:
+            # Stale recommendation must not persist across rounds; clear it
+            # so the rule-based path takes over when the LLM doesn't recommend.
+            self.snapshot.recommended_next_phase = ""
 
     def _apply_consensus(self, event: EventEnvelope) -> None:
         payload = event.payload

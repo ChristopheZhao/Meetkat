@@ -117,6 +117,11 @@ class RoomOrchestrator:
             await asyncio.sleep(self._config.between_turn_delay_sec)
             previous_message = message
 
+        synthesis_artifacts = (
+            synthesis_message.artifacts
+            if isinstance(synthesis_message.artifacts, dict)
+            else {}
+        )
         await publish(
             room_id,
             producer_id="capability.synthesis.1",
@@ -131,11 +136,10 @@ class RoomOrchestrator:
                 "conclusion_reason": round_data.conclusion_reason,
                 "round_index": round_index,
                 "phase": round_data.phase.value,
-                "artifacts": (
-                    synthesis_message.artifacts
-                    if isinstance(synthesis_message.artifacts, dict)
-                    else {}
-                ),
+                "recommended_next_phase": str(
+                    synthesis_artifacts.get("recommended_next_phase", "") or ""
+                ).strip().lower(),
+                "artifacts": synthesis_artifacts,
             },
         )
         await publish(

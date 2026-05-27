@@ -190,9 +190,22 @@ class PreRoomPlanningWorkflow:
         agent_factory: AgentFactory | None = None,
     ) -> None:
         self._requirement_planner = requirement_planner
-        self._role_planner = role_planner or HeuristicRolePlanner()
+        # When no role_planner is injected we fall back to the keyword-based
+        # HeuristicRolePlanner. That is a rule-based code path — track the
+        # selection so the runtime can surface "degraded role planning" to
+        # the operator UI instead of silently shipping rule-based selection.
+        if role_planner is None:
+            self._role_planner = HeuristicRolePlanner()
+            self._role_planner_kind = "heuristic"
+        else:
+            self._role_planner = role_planner
+            self._role_planner_kind = "llm"
         self._role_validator = role_validator or DefaultRoleValidator()
         self._agent_factory = agent_factory or DefaultAgentFactory()
+
+    @property
+    def role_planner_kind(self) -> str:
+        return self._role_planner_kind
 
     @classmethod
     def from_env(cls) -> "PreRoomPlanningWorkflow":

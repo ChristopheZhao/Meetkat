@@ -249,6 +249,29 @@
       ]
     },
     {
+      "id": "PLAN-20260513-009",
+      "title": "LLM-recommended phase pacing + planner-degradation visibility",
+      "kind": "fix",
+      "status": "completed",
+      "priority": "P2",
+      "owner": "codex",
+      "file_path": "docs/plans/active/PLAN-20260513-009.md",
+      "confirmed_by_user": true,
+      "created_at": "2026-05-28T00:00:00Z",
+      "updated_at": "2026-05-28T01:00:00Z",
+      "archived_at": null,
+      "notes": [
+        {
+          "at": "2026-05-28T00:00:00Z",
+          "text": "Created after PLAN-008 closed but left two SHAPING residuals: phase pacing was rule-derived (no LLM input) and HeuristicRolePlanner ran silently as default fallback (no operator visibility)."
+        },
+        {
+          "at": "2026-05-28T01:00:00Z",
+          "text": "Both fixes shipped: synthesis LLM can emit optional recommended_next_phase that overrides the rule-based _phase_for_round derivation; RoomRuntime.runtime_readiness surfaces role_planner_kind + role_planner_degraded so the operator can see when role selection is keyword-based. 5 new tests; 115 backend tests green."
+        }
+      ]
+    },
+    {
       "id": "PLAN-20260513-008",
       "title": "Audit-fix: journal-anchored memory + per-role lessons + supervisor self-memory + focus_angle guard",
       "kind": "fix",

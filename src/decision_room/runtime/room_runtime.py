@@ -240,7 +240,15 @@ class RoomRuntime:
         return [event.to_dict() for event in session.journal.replay(after_seq)]
 
     def runtime_readiness(self) -> dict[str, Any]:
-        return copy.deepcopy(self._runtime_readiness)
+        readiness = copy.deepcopy(self._runtime_readiness)
+        # Surface the role-planner mode so operators can see when role
+        # selection falls back to keyword-matching (a rule-based path)
+        # instead of an LLM-driven planner.
+        role_planner_kind = getattr(self._planning_workflow, "role_planner_kind", "")
+        if role_planner_kind:
+            readiness.setdefault("role_planner_kind", role_planner_kind)
+            readiness.setdefault("role_planner_degraded", role_planner_kind != "llm")
+        return readiness
 
     def _build_room_start_contract(
         self,

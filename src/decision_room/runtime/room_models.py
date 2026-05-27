@@ -68,6 +68,10 @@ class RoomSnapshot:
     last_override: str = ""
     conclusion_type: str = ""
     conclusion_reason: str = ""
+    # Optional next-phase recommendation from the most recent synthesis LLM
+    # turn. ``_phase_for_round`` prefers this over the rule-based derivation
+    # when present and valid; rules become the fallback path.
+    recommended_next_phase: str = ""
     ended_reason: str = ""
     control_reason: str = ""
     orchestration_end_reason: str = ""

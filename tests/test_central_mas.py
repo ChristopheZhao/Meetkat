@@ -774,5 +774,111 @@ class JournalAnchoredMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("latest_claim.implementation_specialist", facts)
 
 
+class LLMRecommendedNextPhaseTests(unittest.TestCase):
+    """C1 regression: synthesis LLM can override the rule-based phase
+    derivation for the next round. Synthesis output carries an optional
+    recommended_next_phase; projector persists it on the snapshot;
+    LLMRoomExecutor._phase_for_round honors it before falling back to
+    rules."""
+
+    def test_parse_synthesis_extracts_valid_recommendation(self) -> None:
+        from decision_room.orchestration.room_executor import _parse_synthesis_output
+
+        payload = json.dumps(
+            {
+                "title": "synthesis",
+                "text": "Aligning specialists on the rollout question.",
+                "agreement": ["phasing is the right primitive"],
+                "disagreement": [],
+                "open_questions": [],
+                "decision_candidate": "Proceed with phased rollout",
+                "action_item_draft": ["draft cutover playbook"],
+                "conclusion_type": "candidate_ready",
+                "conclusion_reason": "specialists converged on the same direction",
+                "should_end_meeting": True,
+                "recommended_next_phase": "decide",
+            }
+        )
+        synth = _parse_synthesis_output(payload)
+        self.assertEqual(synth.recommended_next_phase, "decide")
+
+    def test_parse_synthesis_drops_unknown_phase(self) -> None:
+        from decision_room.orchestration.room_executor import _parse_synthesis_output
+
+        payload = json.dumps(
+            {
+                "title": "synthesis",
+                "text": "x",
+                "agreement": ["a"],
+                "disagreement": [],
+                "open_questions": [],
+                "decision_candidate": "x",
+                "action_item_draft": ["a1"],
+                "conclusion_type": "follow_up_required",
+                "conclusion_reason": "x",
+                "should_end_meeting": False,
+                "recommended_next_phase": "deliberate-forever",
+            }
+        )
+        synth = _parse_synthesis_output(payload)
+        self.assertEqual(synth.recommended_next_phase, "")
+
+    def test_phase_for_round_honors_recommendation(self) -> None:
+        from decision_room.mas.types import MeetingPhase
+        from decision_room.orchestration.room_executor import LLMRoomExecutor
+        from decision_room.providers import ProviderRegistry
+
+        executor = LLMRoomExecutor(
+            registry=ProviderRegistry({}),
+            router=_router(),
+            use_background_threads=False,
+        )
+        snapshot = _snapshot()
+        # Even though rule-based path would return EXPLORE (round 1, empty
+        # transcript), the snapshot's recommended_next_phase should win.
+        snapshot.recommended_next_phase = "synthesize"
+        phase = executor._phase_for_round(snapshot, round_index=1)  # noqa: SLF001
+        self.assertEqual(phase, MeetingPhase.SYNTHESIZE)
+
+    def test_phase_for_round_falls_back_when_no_recommendation(self) -> None:
+        from decision_room.mas.types import MeetingPhase
+        from decision_room.orchestration.room_executor import LLMRoomExecutor
+        from decision_room.providers import ProviderRegistry
+
+        executor = LLMRoomExecutor(
+            registry=ProviderRegistry({}),
+            router=_router(),
+            use_background_threads=False,
+        )
+        snapshot = _snapshot()
+        snapshot.recommended_next_phase = ""
+        phase = executor._phase_for_round(snapshot, round_index=1)  # noqa: SLF001
+        # Default rule for round 1 with empty transcript is EXPLORE.
+        self.assertEqual(phase, MeetingPhase.EXPLORE)
+
+
+class RolePlannerVisibilityTests(unittest.TestCase):
+    """C2 regression: runtime_readiness exposes role_planner_kind and
+    role_planner_degraded so the operator can see when role selection
+    falls back to the keyword-based HeuristicRolePlanner."""
+
+    def test_runtime_readiness_marks_heuristic_role_planner_as_degraded(self) -> None:
+        from decision_room.runtime.http_api import build_runtime_from_env
+        from decision_room.runtime.room_runtime import RuntimeConfig
+
+        runtime = build_runtime_from_env({}, config=RuntimeConfig())
+        try:
+            readiness = runtime.runtime_readiness()
+            # No LLM-driven RolePlanner is wired in the default path yet,
+            # so the workflow falls back to HeuristicRolePlanner — operator
+            # MUST be able to see this.
+            self.assertEqual(readiness.get("role_planner_kind"), "heuristic")
+            self.assertTrue(readiness.get("role_planner_degraded"))
+        finally:
+            import asyncio
+
+            asyncio.run(runtime.close())
+
+
 if __name__ == "__main__":
     unittest.main()

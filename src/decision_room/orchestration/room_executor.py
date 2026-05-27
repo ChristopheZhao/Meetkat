@@ -116,6 +116,12 @@ class SynthesisOutput:
     conclusion_type: str
     conclusion_reason: str
     should_end_meeting: bool
+    # Optional. When non-empty, the synthesis agent is recommending the
+    # next round's phase. Used to override the rule-based phase derivation
+    # in ``_phase_for_round`` so the LLM can decide pacing, not just the
+    # formula. Valid values: "explore", "debate", "synthesize", "decide".
+    # Empty string means "no recommendation — let the runtime decide".
+    recommended_next_phase: str = ""
 
 
 @dataclass(frozen=True)
@@ -342,6 +348,7 @@ class LLMRoomExecutor:
                 "action_item_draft": synthesis_output.action_item_draft,
                 "conclusion_type": synthesis_output.conclusion_type,
                 "conclusion_reason": synthesis_output.conclusion_reason,
+                "recommended_next_phase": synthesis_output.recommended_next_phase,
                 "route": _route_artifact(synthesis_route),
             },
         )
@@ -660,6 +667,18 @@ class LLMRoomExecutor:
         return snapshot.current_focus or default_focus
 
     def _phase_for_round(self, snapshot: Any, round_index: int) -> MeetingPhase:
+        # LLM-recommended next phase takes precedence whenever the prior
+        # synthesis turn emitted a valid recommendation. This lets the
+        # synthesis agent advance or pull back the meeting pacing instead
+        # of being locked into the rule-based derivation below.
+        recommended = str(getattr(snapshot, "recommended_next_phase", "") or "").strip().lower()
+        if recommended:
+            try:
+                return MeetingPhase(recommended)
+            except ValueError:
+                # Defensive: projector should have filtered invalid values,
+                # but a future schema drift should never break round build.
+                pass
         if round_index <= 1 and not snapshot.transcript:
             return MeetingPhase.EXPLORE
         if snapshot.candidate_decision:
@@ -930,6 +949,8 @@ def _build_synthesis_prompts(
         "conclusion_type": "follow_up_required",
         "conclusion_reason": "why this round currently lands on that conclusion type",
         "should_end_meeting": False,
+        # Optional. Empty string means "let the runtime decide".
+        "recommended_next_phase": "",
     }
     system_prompt = (
         "You are the synthesis capability in a multi-agent decision room. "
@@ -959,7 +980,8 @@ def _build_synthesis_prompts(
         "- conclusion_reason must explain the current semantic outcome of the meeting, not the control budget.\n\n"
         "- Do not use facts already covered by room_state.validated_context as the reason for follow-up or blocked status.\n"
         "- Set should_end_meeting to true only when the meeting should stop now and hand off to execution, follow-up, or human decision outside the room.\n"
-        "- Set should_end_meeting to false when another in-room round is still necessary to resolve the current discussion.\n\n"
+        "- Set should_end_meeting to false when another in-room round is still necessary to resolve the current discussion.\n"
+        "- OPTIONAL: emit recommended_next_phase if you want to override the runtime's default phase pacing for the next round. Valid values: 'explore' (open up new angles), 'debate' (stress-test current claims), 'synthesize' (converge on a recommendation), 'decide' (lock the candidate). Leave it empty when the default rule-based pacing is fine; only use it when you have a clear judgment that the room needs to advance or pull back a phase.\n\n"
         "Output schema example:\n"
         f"{json.dumps(schema, ensure_ascii=False, indent=2)}"
     )
@@ -1031,6 +1053,9 @@ def _parse_synthesis_output(raw: str) -> SynthesisOutput:
         disagreement=disagreement,
         open_questions=open_questions,
     )
+    recommended_next_phase = _coerce_recommended_next_phase(
+        payload.get("recommended_next_phase")
+    )
     return SynthesisOutput(
         title=title,
         text=text,
@@ -1042,7 +1067,20 @@ def _parse_synthesis_output(raw: str) -> SynthesisOutput:
         conclusion_type=conclusion_type,
         conclusion_reason=conclusion_reason,
         should_end_meeting=should_end_meeting,
+        recommended_next_phase=recommended_next_phase,
     )
+
+
+_RECOMMENDED_PHASES = {"explore", "debate", "synthesize", "decide"}
+
+
+def _coerce_recommended_next_phase(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    normalized = value.strip().lower()
+    if not normalized:
+        return ""
+    return normalized if normalized in _RECOMMENDED_PHASES else ""
 
 
 def _load_json_payload(raw: str, role: str) -> dict[str, Any]:

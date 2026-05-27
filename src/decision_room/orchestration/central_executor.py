@@ -330,6 +330,7 @@ class CentralizedMASExecutor:
                 "action_item_draft": synthesis_output.action_item_draft,
                 "conclusion_type": synthesis_output.conclusion_type,
                 "conclusion_reason": synthesis_output.conclusion_reason,
+                "recommended_next_phase": synthesis_output.recommended_next_phase,
                 "route": _route_artifact(synthesis_route),
                 "central_mas_state_ref": "host.artifacts.central_mas.supervisor_state",
             },
