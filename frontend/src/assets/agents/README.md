@@ -20,6 +20,28 @@ be regenerated with the prompts below. Keep aspect ratio square (1:1),
 512×512 minimum, transparent background optional. Convert PNG → WebP
 losslessly (e.g., `cwebp -lossless input.png -o output.webp`).
 
+### Known transport-layer blocker (as of 2026-05-28)
+
+A regeneration attempt was made via the `claude.ai image-gen` MCP server.
+Every response — from `generate_image` (openai + hunyuan providers tested),
+`reload_config`, and any other tool that returns content — fails the
+client-side MCP validator with:
+
+```
+content[0].annotations: Invalid input: expected object, received null
+```
+
+The image-gen MCP server emits `annotations: null` in its response
+envelope but the Claude Code MCP transport requires `annotations` to be
+an object (or omitted entirely). This is a server-side schema-version
+mismatch; nothing the client can work around. `ListMcpResourcesTool`
+(which doesn't go through the same content shape) does work.
+
+Until the server is patched (drop the `annotations` field when there is
+nothing to annotate, OR send `{}`), use the prompts below to regenerate
+out-of-band with any image generator and drop the resulting WebP files
+into this directory under the exact filenames documented in the table.
+
 ### Shared visual contract (apply to every prompt)
 
 > Cinematic, soft warm rim light, deep navy + amber palette, 3/4 portrait
