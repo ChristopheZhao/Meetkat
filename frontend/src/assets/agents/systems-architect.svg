@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 512 512"
+     width="512"
+     height="512"
+     role="img"
+     aria-label="系统架构师">
+  <title>系统架构师</title>
+  <defs>
+    <radialGradient id="bg-systems-architect" cx="50%" cy="42%" r="65%">
+      <stop offset="0%" stop-color="#1a2236" />
+      <stop offset="55%" stop-color="#0f1626" />
+      <stop offset="100%" stop-color="#050810" />
+    </radialGradient>
+    <radialGradient id="rim-systems-architect" cx="22%" cy="18%" r="42%">
+      <stop offset="0%" stop-color="#ffb86b" stop-opacity="0.42" />
+      <stop offset="60%" stop-color="#ffb86b" stop-opacity="0.06" />
+      <stop offset="100%" stop-color="#ffb86b" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="accent-systems-architect" cx="50%" cy="58%" r="48%">
+      <stop offset="0%" stop-color="#58e3c9" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#58e3c9" stop-opacity="0" />
+    </radialGradient>
+    <filter id="soft-systems-architect" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="1.4" />
+    </filter>
+  </defs>
+
+  <!-- background -->
+  <rect width="512" height="512" rx="64" ry="64" fill="url(#bg-systems-architect)" />
+  <!-- warm amber rim light -->
+  <rect width="512" height="512" rx="64" ry="64" fill="url(#rim-systems-architect)" />
+  <!-- role-tinted center wash -->
+  <rect width="512" height="512" rx="64" ry="64" fill="url(#accent-systems-architect)" />
+
+  <!-- accent ring -->
+  <circle cx="256" cy="256" r="170"
+          fill="none"
+          stroke="#58e3c9"
+          stroke-opacity="0.85"
+          stroke-width="4" />
+  <circle cx="256" cy="256" r="170"
+          fill="none"
+          stroke="#58e3c9"
+          stroke-opacity="0.18"
+          stroke-width="14" />
+
+  <!-- glyph -->
+  <g filter="url(#soft-systems-architect)"
+     fill="none"
+     stroke="#58e3c9"
+     stroke-width="4.0"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     opacity="0.95">
+    <path d="M 192 220 L 256 188 L 320 220 L 256 252 Z M 192 260 L 256 228 L 320 260 L 256 292 Z M 192 300 L 256 268 L 320 300 L 256 332 Z" />
+  </g>
+
+  <!-- initials (CJK so works as a fallback identifier even when rendered tiny) -->
+  <text x="256" y="430"
+        text-anchor="middle"
+        font-family="'PingFang SC', 'Microsoft YaHei', 'Source Han Sans SC', 'Hiragino Sans GB', sans-serif"
+        font-size="44"
+        font-weight="600"
+        fill="#58e3c9"
+        opacity="0.92">架</text>
+</svg>

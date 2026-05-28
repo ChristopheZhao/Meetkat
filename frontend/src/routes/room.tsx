@@ -15,11 +15,11 @@ import {
 } from "@tanstack/react-query";
 
 import { postHumanMessage, postHumanOverride } from "../lib/api";
-import decisionScribeAvatar from "../assets/agents/decision-scribe.webp";
-import productStrategistAvatar from "../assets/agents/product-strategist.webp";
-import riskControllerAvatar from "../assets/agents/risk-controller.webp";
-import supervisorAvatar from "../assets/agents/supervisor.webp";
-import systemsArchitectAvatar from "../assets/agents/systems-architect.webp";
+import decisionScribeAvatar from "../assets/agents/decision-scribe.svg";
+import productStrategistAvatar from "../assets/agents/product-strategist.svg";
+import riskControllerAvatar from "../assets/agents/risk-controller.svg";
+import supervisorAvatar from "../assets/agents/supervisor.svg";
+import systemsArchitectAvatar from "../assets/agents/systems-architect.svg";
 import {
   buildRoleDirectory,
   formatToken,

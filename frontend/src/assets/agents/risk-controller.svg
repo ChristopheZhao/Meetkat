@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 512 512"
+     width="512"
+     height="512"
+     role="img"
+     aria-label="风险控制师">
+  <title>风险控制师</title>
+  <defs>
+    <radialGradient id="bg-risk-controller" cx="50%" cy="42%" r="65%">
+      <stop offset="0%" stop-color="#1a2236" />
+      <stop offset="55%" stop-color="#0f1626" />
+      <stop offset="100%" stop-color="#050810" />
+    </radialGradient>
+    <radialGradient id="rim-risk-controller" cx="22%" cy="18%" r="42%">
+      <stop offset="0%" stop-color="#ffb86b" stop-opacity="0.42" />
+      <stop offset="60%" stop-color="#ffb86b" stop-opacity="0.06" />
+      <stop offset="100%" stop-color="#ffb86b" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="accent-risk-controller" cx="50%" cy="58%" r="48%">
+      <stop offset="0%" stop-color="#ff7a8c" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#ff7a8c" stop-opacity="0" />
+    </radialGradient>
+    <filter id="soft-risk-controller" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="1.4" />
+    </filter>
+  </defs>
+
+  <!-- background -->
+  <rect width="512" height="512" rx="64" ry="64" fill="url(#bg-risk-controller)" />
+  <!-- warm amber rim light -->
+  <rect width="512" height="512" rx="64" ry="64" fill="url(#rim-risk-controller)" />
+  <!-- role-tinted center wash -->
+  <rect width="512" height="512" rx="64" ry="64" fill="url(#accent-risk-controller)" />
+
+  <!-- accent ring -->
+  <circle cx="256" cy="256" r="170"
+          fill="none"
+          stroke="#ff7a8c"
+          stroke-opacity="0.85"
+          stroke-width="4" />
+  <circle cx="256" cy="256" r="170"
+          fill="none"
+          stroke="#ff7a8c"
+          stroke-opacity="0.18"
+          stroke-width="14" />
+
+  <!-- glyph -->
+  <g filter="url(#soft-risk-controller)"
+     fill="none"
+     stroke="#ff7a8c"
+     stroke-width="4.0"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     opacity="0.95">
+    <path d="M 256 184 L 312 208 L 304 296 Q 296 320 256 332 Q 216 320 208 296 L 200 208 Z M 256 220 L 256 280" />
+  </g>
+
+  <!-- initials (CJK so works as a fallback identifier even when rendered tiny) -->
+  <text x="256" y="430"
+        text-anchor="middle"
+        font-family="'PingFang SC', 'Microsoft YaHei', 'Source Han Sans SC', 'Hiragino Sans GB', sans-serif"
+        font-size="44"
+        font-weight="600"
+        fill="#ff7a8c"
+        opacity="0.92">险</text>
+</svg>

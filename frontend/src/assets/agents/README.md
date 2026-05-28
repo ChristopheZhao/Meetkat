@@ -1,17 +1,31 @@
 # Agent Avatars
 
-These five WebP files are image-gen artifacts representing the centralized
-MAS specialist roles. They are deliberately stylized to share a common
-visual language (lighting, color palette, framing) so the meeting room UI
-can show them in a row without jarring inconsistency.
+Two parallel sets representing the centralized MAS specialist roles:
 
-| File | Role ID | Display name |
-|------|---------|--------------|
-| `supervisor.webp` | `host` / `supervisor` | 主持人 |
-| `systems-architect.webp` | `implementation_specialist` | 系统架构师 |
-| `product-strategist.webp` | `product_specialist` | 产品策略师 |
-| `risk-controller.webp` | `risk_specialist` | 风险控制师 |
-| `decision-scribe.webp` | `operations_specialist` / `synthesis` | 运营观察员 / 决策记录员 |
+- **`*.svg` (primary, used by the room UI)** — procedurally generated
+  badge-style avatars from `scripts/regen_avatars_svg.py`. Each avatar
+  is a deterministic, network-free, version-controlled SVG built around
+  a shared visual contract: deep navy radial background, warm amber rim
+  light, role-tinted accent ring, and a role-specific glyph stroke.
+  Rebuild any time with::
+
+      PYTHONPATH=src .venv/bin/python scripts/regen_avatars_svg.py
+
+- **`*.webp` (legacy)** — earlier raster image-gen artifacts kept for
+  reference and as a fallback if the SVG path is ever inappropriate.
+  The room UI no longer imports these.
+
+| Role ID | Display name | Avatar file (primary) | Accent color |
+|---------|--------------|-----------------------|--------------|
+| `host` / `supervisor` | 主持人 | `supervisor.svg` | `#ffd166` (amber) |
+| `implementation_specialist` | 系统架构师 | `systems-architect.svg` | `#58e3c9` (teal) |
+| `product_specialist` | 产品策略师 | `product-strategist.svg` | `#ffb86b` (orange) |
+| `risk_specialist` | 风险控制师 | `risk-controller.svg` | `#ff7a8c` (pink) |
+| `operations_specialist` / `synthesis` | 决策记录员 | `decision-scribe.svg` | `#b794ff` (violet) |
+
+The per-role accent colors match `--role-*` tokens in
+`frontend/src/styles/global.css`, so the avatar accent reads in the same
+visual language as the role-tinted transcript card borders in the room.
 
 ## Regenerating with image-gen
 

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 512 512"
+     width="512"
+     height="512"
+     role="img"
+     aria-label="产品策略师">
+  <title>产品策略师</title>
+  <defs>
+    <radialGradient id="bg-product-strategist" cx="50%" cy="42%" r="65%">
+      <stop offset="0%" stop-color="#1a2236" />
+      <stop offset="55%" stop-color="#0f1626" />
+      <stop offset="100%" stop-color="#050810" />
+    </radialGradient>
+    <radialGradient id="rim-product-strategist" cx="22%" cy="18%" r="42%">
+      <stop offset="0%" stop-color="#ffb86b" stop-opacity="0.42" />
+      <stop offset="60%" stop-color="#ffb86b" stop-opacity="0.06" />
+      <stop offset="100%" stop-color="#ffb86b" stop-opacity="0" />
+    </radialGradient>
+    <radialGradient id="accent-product-strategist" cx="50%" cy="58%" r="48%">
+      <stop offset="0%" stop-color="#ffb86b" stop-opacity="0.22" />
+      <stop offset="100%" stop-color="#ffb86b" stop-opacity="0" />
+    </radialGradient>
+    <filter id="soft-product-strategist" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="1.4" />
+    </filter>
+  </defs>
+
+  <!-- background -->
+  <rect width="512" height="512" rx="64" ry="64" fill="url(#bg-product-strategist)" />
+  <!-- warm amber rim light -->
+  <rect width="512" height="512" rx="64" ry="64" fill="url(#rim-product-strategist)" />
+  <!-- role-tinted center wash -->
+  <rect width="512" height="512" rx="64" ry="64" fill="url(#accent-product-strategist)" />
+
+  <!-- accent ring -->
+  <circle cx="256" cy="256" r="170"
+          fill="none"
+          stroke="#ffb86b"
+          stroke-opacity="0.85"
+          stroke-width="4" />
+  <circle cx="256" cy="256" r="170"
+          fill="none"
+          stroke="#ffb86b"
+          stroke-opacity="0.18"
+          stroke-width="14" />
+
+  <!-- glyph -->
+  <g filter="url(#soft-product-strategist)"
+     fill="none"
+     stroke="#ffb86b"
+     stroke-width="10.0"
+     stroke-linecap="round"
+     stroke-linejoin="round"
+     opacity="0.95">
+    <path d="M 192 296 Q 256 232 320 296 M 208 308 Q 256 252 304 308 M 224 320 Q 256 280 288 320 M 256 304 L 256 332" />
+  </g>
+
+  <!-- initials (CJK so works as a fallback identifier even when rendered tiny) -->
+  <text x="256" y="430"
+        text-anchor="middle"
+        font-family="'PingFang SC', 'Microsoft YaHei', 'Source Han Sans SC', 'Hiragino Sans GB', sans-serif"
+        font-size="44"
+        font-weight="600"
+        fill="#ffb86b"
+        opacity="0.92">品</text>
+</svg>
