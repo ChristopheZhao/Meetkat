@@ -15,11 +15,12 @@ import {
 } from "@tanstack/react-query";
 
 import { postHumanMessage, postHumanOverride } from "../lib/api";
-import decisionScribeAvatar from "../assets/agents/decision-scribe.svg";
-import productStrategistAvatar from "../assets/agents/product-strategist.svg";
-import riskControllerAvatar from "../assets/agents/risk-controller.svg";
-import supervisorAvatar from "../assets/agents/supervisor.svg";
-import systemsArchitectAvatar from "../assets/agents/systems-architect.svg";
+import decisionScribeAvatar from "../assets/agents/decision-scribe-codex.png";
+import operationsSpecialistAvatar from "../assets/agents/operations-specialist-codex.png";
+import productStrategistAvatar from "../assets/agents/product-strategist-codex.png";
+import riskControllerAvatar from "../assets/agents/risk-controller-codex.png";
+import supervisorAvatar from "../assets/agents/supervisor-codex.png";
+import systemsArchitectAvatar from "../assets/agents/systems-architect-codex.png";
 import {
   buildRoleDirectory,
   formatToken,
@@ -91,6 +92,9 @@ const roleLabelMap: Record<string, string> = {
   human: "你（操作员）",
   system: "系统",
   synthesis: "决策记录员",
+  pro: "正方顾问",
+  con: "反方顾问",
+  recorder: "记录员",
   implementation_specialist: "系统架构师",
   product_specialist: "产品策略师",
   risk_specialist: "风险控制师",
@@ -100,13 +104,16 @@ const roleLabelMap: Record<string, string> = {
 const roleAvatarMap: Record<string, string> = {
   host: supervisorAvatar,
   supervisor: supervisorAvatar,
+  pro: productStrategistAvatar,
+  con: riskControllerAvatar,
+  recorder: decisionScribeAvatar,
   implementation_specialist: systemsArchitectAvatar,
   systems_architect: systemsArchitectAvatar,
   product_specialist: productStrategistAvatar,
   product_strategist: productStrategistAvatar,
   risk_specialist: riskControllerAvatar,
   risk_controller: riskControllerAvatar,
-  operations_specialist: decisionScribeAvatar,
+  operations_specialist: operationsSpecialistAvatar,
   decision_scribe: decisionScribeAvatar,
   synthesis: decisionScribeAvatar,
 };

@@ -3,6 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 
 import { getRoomSnapshot } from "../lib/api";
 import {
+  buildDecisionRecordFilename,
+  buildDecisionRecordMarkdown,
+} from "../lib/decision-record";
+import {
   buildRoleDirectory,
   formatToken,
   readProductOperatorContractSections,
@@ -40,10 +44,32 @@ export function ResultsPage() {
   const contractSections = readProductOperatorContractSections(snapshot);
   const missingOperatorInputs = readPreflightList(snapshot, "missing_operator_inputs");
 
+  const handleDownloadMarkdown = () => {
+    const markdown = buildDecisionRecordMarkdown(snapshot, roleDirectory);
+    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = buildDecisionRecordFilename(snapshot);
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <p className={styles.kicker}>会议决策结果 · {conclusionType}</p>
+        <div className={styles.headerTop}>
+          <p className={styles.kicker}>会议决策结果 · {conclusionType}</p>
+          <button
+            className={styles.downloadButton}
+            onClick={handleDownloadMarkdown}
+            type="button"
+          >
+            下载 Markdown
+          </button>
+        </div>
         <h2>{snapshot.topic}</h2>
         <p>{conclusionReason || "会议尚未发布显式结论。"}</p>
         <p className={styles.requirement}>

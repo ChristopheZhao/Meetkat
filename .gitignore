@@ -25,6 +25,10 @@ frontend/.contract-dist/
 # Local tooling
 .codex
 .playwright-cli/
+.playwright-mcp/
+
+# Local verification screenshots (root-level PNGs from Playwright runs)
+/*.png
 
 # Editor / OS noise
 .DS_Store
