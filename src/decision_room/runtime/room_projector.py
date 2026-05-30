@@ -3,7 +3,13 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from .events import EventEnvelope
-from .room_models import ConsensusState, Participant, RoomSnapshot, TranscriptEntry
+from .room_models import (
+    ConsensusState,
+    Participant,
+    RoomSnapshot,
+    ToolCallRecord,
+    TranscriptEntry,
+)
 
 
 class _MemoryStoreLike(Protocol):
@@ -61,8 +67,52 @@ class RoomProjector:
             self._apply_meeting_ended(event)
         elif event.event_type == "memory.write":
             self._apply_memory_write(event)
+        elif event.event_type == "agent.tool_call":
+            self._apply_tool_call(event)
+        elif event.event_type == "agent.tool_result":
+            self._apply_tool_result(event)
 
         return snapshot
+
+    def _apply_tool_call(self, event: EventEnvelope) -> None:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        call_id = str(payload.get("call_id", "")).strip()
+        if not call_id:
+            return
+        if any(record.call_id == call_id for record in self.snapshot.tool_calls):
+            return
+        args = payload.get("args")
+        self.snapshot.tool_calls.append(
+            ToolCallRecord(
+                call_id=call_id,
+                tool_name=str(payload.get("tool_name", "")).strip(),
+                agent_role=str(
+                    payload.get("agent_role", event.role)
+                ).strip() or event.role,
+                args=dict(args) if isinstance(args, dict) else {},
+                seq=event.room_seq,
+                ts_ms=event.ts_ms,
+                status="pending",
+            )
+        )
+
+    def _apply_tool_result(self, event: EventEnvelope) -> None:
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        call_id = str(payload.get("call_id", "")).strip()
+        if not call_id:
+            return
+        for record in self.snapshot.tool_calls:
+            if record.call_id != call_id:
+                continue
+            ok = bool(payload.get("ok", False))
+            record.status = "ok" if ok else "error"
+            record.result = payload.get("result")
+            record.error = str(payload.get("error", "")).strip()
+            try:
+                record.latency_ms = int(payload.get("latency_ms", 0) or 0)
+            except (TypeError, ValueError):
+                record.latency_ms = 0
+            return
 
     def _apply_memory_write(self, event: EventEnvelope) -> None:
         if self._memory_store is None:
