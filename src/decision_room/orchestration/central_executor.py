@@ -35,11 +35,8 @@ from decision_room.mas.types import (
 from decision_room.memory import (
     LongTermLessonStore,
     RoomMemoryStore,
-    agent_scope,
     default_long_term_store,
     default_room_memory_store,
-    mas_scope,
-    memory_recall_for_role,
 )
 from decision_room.policies.fallback import DisasterOnlyFallbackPolicy
 from decision_room.policies.routing_control import RoutingControlPolicy
@@ -97,31 +94,38 @@ class CentralizedMASExecutor:
     ) -> None:
         self._registry = registry
         self._router = router
-        self._supervisor = supervisor or LLMSupervisor(
-            registry=registry,
-            router=router,
-            transient_max_attempts=transient_max_attempts,
-        )
+        # ``supervisor`` is a back-compat injection point — callers that
+        # still construct an LLMSupervisor directly can pass it in. Otherwise
+        # the SupervisorAgent below owns plan_round + persistence uniformly.
+        self._legacy_supervisor = supervisor
         self._coordination = coordination or HybridCoordinationStrategy()
         self._consensus = consensus or HybridConsensusStrategy()
         self._planner = planner or HybridPlanningStrategy()
-        # Phase 2: specialist + synthesis now run as ``Agent`` instances. The
-        # central path stops reaching into LLMRoomExecutor's private methods —
-        # the old ``self._specialist_runner = LLMRoomExecutor(...)`` shim is
-        # gone along with its six ``# noqa: SLF001`` cross-calls.
-        from decision_room.agents import SpecialistAgent, SynthesisAgent
+        # Phase 2: specialist + synthesis run as Agent instances.
+        # Phase 3: supervisor joins them so plan persistence + recall live
+        # inside the agent rather than inline on the executor. Memory
+        # stores are shared so every agent's recall block sees the same
+        # state as the orchestrator-side preflight code.
+        from decision_room.agents import (
+            SpecialistAgent,
+            SupervisorAgent,
+            SynthesisAgent,
+        )
 
+        self._room_memory = room_memory_store or default_room_memory_store()
+        self._long_term = long_term_store or default_long_term_store()
         agent_kwargs = dict(
             registry=registry,
             router=router,
             use_background_threads=use_background_threads,
             transient_max_attempts=transient_max_attempts,
+            room_memory_store=self._room_memory,
+            long_term_store=self._long_term,
         )
         self._specialist_agent = SpecialistAgent(**agent_kwargs)
         self._synthesis_agent = SynthesisAgent(**agent_kwargs)
+        self._supervisor_agent = SupervisorAgent(**agent_kwargs)
         self._transient_max_attempts = max(1, transient_max_attempts)
-        self._room_memory = room_memory_store or default_room_memory_store()
-        self._long_term = long_term_store or default_long_term_store()
 
     @classmethod
     def from_env(cls) -> RoomExecutor:
@@ -181,23 +185,38 @@ class CentralizedMASExecutor:
         route_ctx = ctx
         route = self._router.route(route_ctx)
 
-        supervisor_plan, route_ctx, route = await self._supervisor.plan_round(
-            snapshot=snapshot,
-            round_index=round_index,
-            phase=phase,
-            next_focus=next_focus,
-            route_ctx=route_ctx,
-            route=route,
-        )
-        # B3: supervisor self-memory — write decision_focus / reason /
-        # speakers to shared scope so the next-round supervisor's
-        # memory_recall surfaces what it decided last round.
-        await self._record_supervisor_plan(
-            publish=publish,
-            room_id=snapshot.room_id,
-            round_index=round_index,
-            plan=supervisor_plan,
-        )
+        if self._legacy_supervisor is not None:
+            # Back-compat path: a caller injected a custom LLMSupervisor.
+            # Drive it directly but still let SupervisorAgent's persistence
+            # cover the journal write so behavior stays uniform.
+            supervisor_plan, route_ctx, route = await self._legacy_supervisor.plan_round(
+                snapshot=snapshot,
+                round_index=round_index,
+                phase=phase,
+                next_focus=next_focus,
+                route_ctx=route_ctx,
+                route=route,
+            )
+            await self._supervisor_agent._persist_plan(  # noqa: SLF001
+                publish=publish,
+                room_id=snapshot.room_id,
+                round_index=round_index,
+                plan=supervisor_plan,
+            )
+        else:
+            supervisor_ctx = TurnContext(
+                snapshot=snapshot,
+                round_index=round_index,
+                phase=phase,
+                next_focus=next_focus,
+                route_ctx=route_ctx,
+                route=route,
+                publish=publish,
+            )
+            supervisor_result = await self._supervisor_agent.run(supervisor_ctx)
+            supervisor_plan = supervisor_result.plan
+            route_ctx = supervisor_result.ctx
+            route = supervisor_result.route
         host_agenda = supervisor_plan_to_host_agenda(supervisor_plan)
         runnable = supervisor_plan.runnable_speakers()
         if not runnable:
@@ -225,18 +244,9 @@ class CentralizedMASExecutor:
         target_claim_ref = ""
         room_id = snapshot.room_id
         for specialist, slot in specialist_pairs:
-            recall = memory_recall_for_role(
-                room_id=room_id,
-                role=specialist.role,
-                room_store=self._room_memory,
-                long_term_store=self._long_term,
-            )
-            # Phase 2: specialist authors its own claim through SpecialistAgent.
-            # The supervisor only emits an optional focus_angle hint; the agent
-            # owns its own ReAct loop (bounded by ``CandidateSpecialist.turn_budget``)
-            # and any tool calls. Memory recall stays a centralized-topology
-            # concern for one more phase — Phase 3 wires recall through the
-            # agent itself instead of the orchestrator.
+            # Phase 3: the SpecialistAgent now reads its own recall and
+            # persists its own claim through memory.write events. The
+            # orchestrator no longer reaches into the memory store directly.
             specialist_ctx = TurnContext(
                 snapshot=snapshot,
                 round_index=round_index,
@@ -250,7 +260,6 @@ class CentralizedMASExecutor:
                     "turn_task": slot.focus_angle,
                     "host_agenda": host_agenda,
                     "target_claim_ref": target_claim_ref,
-                    "memory_recall": recall,
                 },
             )
             specialist_result = await self._specialist_agent.run(specialist_ctx)
@@ -266,15 +275,6 @@ class CentralizedMASExecutor:
                 )
             )
             target_claim_ref = output.claim
-            # Persist this specialist's claim through the journal so memory
-            # rebuilds via replay (RoomProjector._apply_memory_write).
-            await self._record_specialist_memory(
-                publish=publish,
-                room_id=room_id,
-                role=specialist.role,
-                round_index=round_index,
-                output=output,
-            )
 
         synthesis_ctx = TurnContext(
             snapshot=snapshot,
@@ -386,136 +386,10 @@ class CentralizedMASExecutor:
             synthesis_message=synthesis_message,
         )
 
-    async def _record_specialist_memory(
-        self,
-        *,
-        publish: Any,
-        room_id: str,
-        role: str,
-        round_index: int,
-        output: Any,
-    ) -> None:
-        shared_scope = mas_scope(room_id)
-        agent_scope_id = agent_scope(room_id, role)
-        claim = getattr(output, "claim", "")
-        evidence = list(getattr(output, "evidence", []) or [])
-        confidence = float(getattr(output, "confidence", 0.0) or 0.0)
-        fact_key = f"latest_claim.{role}"
-        shared_fact_value = {
-            "round_index": round_index,
-            "claim": claim,
-            "evidence": evidence,
-            "confidence": confidence,
-        }
-        shared_event_payload = {
-            "role": role,
-            "round_index": round_index,
-            "claim": claim,
-            "confidence": confidence,
-        }
-        local_fact_value = {
-            "round_index": round_index,
-            "claim": claim,
-            "evidence": evidence[:3],
-            "confidence": confidence,
-        }
-        await self._emit_memory_write(
-            publish=publish,
-            room_id=room_id,
-            scope=shared_scope,
-            fact_key=fact_key,
-            fact_value=shared_fact_value,
-        )
-        await self._emit_memory_write(
-            publish=publish,
-            room_id=room_id,
-            scope=shared_scope,
-            event_type="specialist.claim",
-            event_payload=shared_event_payload,
-        )
-        await self._emit_memory_write(
-            publish=publish,
-            room_id=room_id,
-            scope=agent_scope_id,
-            fact_key="last_self_claim",
-            fact_value=local_fact_value,
-        )
-
-    async def _record_supervisor_plan(
-        self,
-        *,
-        publish: Any,
-        room_id: str,
-        round_index: int,
-        plan: SupervisorPlan,
-    ) -> None:
-        shared = mas_scope(room_id)
-        plan_payload = {
-            "round_index": round_index,
-            "phase": plan.phase.value,
-            "decision_focus": plan.decision_focus,
-            "current_focus": plan.current_focus,
-            "reason": plan.reason,
-            "open_questions": list(plan.open_questions),
-            "speakers": [item.to_payload() for item in plan.speakers],
-        }
-        await self._emit_memory_write(
-            publish=publish,
-            room_id=room_id,
-            scope=shared,
-            fact_key="latest_supervisor_plan",
-            fact_value=plan_payload,
-        )
-        await self._emit_memory_write(
-            publish=publish,
-            room_id=room_id,
-            scope=shared,
-            event_type="supervisor.plan",
-            event_payload={
-                "round_index": round_index,
-                "decision_focus": plan.decision_focus,
-                "speakers": [item.agent for item in plan.runnable_speakers()],
-            },
-        )
-
-    async def _emit_memory_write(
-        self,
-        *,
-        publish: Any,
-        room_id: str,
-        scope: str,
-        fact_key: str | None = None,
-        fact_value: Any = None,
-        event_type: str | None = None,
-        event_payload: dict[str, Any] | None = None,
-    ) -> None:
-        """Publish a journal memory.write event (when ``publish`` is
-        provided) so the RoomEventJournal stays the single source of truth.
-        Falls back to direct store writes when no publish callable is
-        supplied (test / standalone harness mode)."""
-        payload: dict[str, Any] = {"scope": scope}
-        if fact_key:
-            payload["fact_key"] = fact_key
-            payload["fact_value"] = fact_value
-        if event_type:
-            payload["memory_event_type"] = event_type
-            payload["memory_event_payload"] = event_payload or {}
-        if publish is not None:
-            await publish(
-                room_id,
-                producer_id="memory.writer.1",
-                role="system",
-                event_type="memory.write",
-                payload=payload,
-            )
-            return
-        # Standalone fallback: write directly to local store. State will
-        # not be journal-anchored in this path, intended for unit tests
-        # that construct the executor without a runtime.
-        if fact_key:
-            self._room_memory.write_fact(room_id, scope, fact_key, fact_value)
-        if event_type:
-            self._room_memory.record_event(room_id, scope, event_type, event_payload or {})
+    # _record_specialist_memory / _record_supervisor_plan / _emit_memory_write
+    # were deleted in Phase 3. SpecialistAgent.run, SupervisorAgent.run, and
+    # SynthesisAgent.run now own their own memory.write events through
+    # BaseLLMAgent.emit_memory_write.
 
     def _coordination_for_speakers(
         self,

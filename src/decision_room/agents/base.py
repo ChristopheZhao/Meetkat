@@ -23,6 +23,13 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Mapping, Protocol
 
 from decision_room.mas.types import DecisionContext, DecisionSignals, RoutingDecision
+from decision_room.memory import (
+    LongTermLessonStore,
+    RoomMemoryStore,
+    default_long_term_store,
+    default_room_memory_store,
+    memory_recall_for_role,
+)
 from decision_room.providers import (
     GenerateRequest,
     ProviderHTTPError,
@@ -136,11 +143,71 @@ class BaseLLMAgent:
         router: HybridModelRouter,
         use_background_threads: bool = True,
         transient_max_attempts: int = 2,
+        room_memory_store: RoomMemoryStore | None = None,
+        long_term_store: LongTermLessonStore | None = None,
     ) -> None:
         self._registry = registry
         self._router = router
         self._use_background_threads = use_background_threads
         self._transient_max_attempts = max(1, transient_max_attempts)
+        self._room_memory = room_memory_store or default_room_memory_store()
+        self._long_term = long_term_store or default_long_term_store()
+
+    @property
+    def room_memory(self) -> RoomMemoryStore:
+        return self._room_memory
+
+    @property
+    def long_term_memory(self) -> LongTermLessonStore:
+        return self._long_term
+
+    def read_memory_recall(self, room_id: str, role: str) -> dict[str, Any]:
+        """Pull this agent's recall block (shared + agent-local + lessons)."""
+        return memory_recall_for_role(
+            room_id=room_id,
+            role=role,
+            room_store=self._room_memory,
+            long_term_store=self._long_term,
+        )
+
+    async def emit_memory_write(
+        self,
+        *,
+        publish: PublishCallable | None,
+        room_id: str,
+        scope: str,
+        fact_key: str | None = None,
+        fact_value: Any = None,
+        event_type: str | None = None,
+        event_payload: dict[str, Any] | None = None,
+    ) -> None:
+        """Publish a journal ``memory.write`` event so projection rebuilds
+        from journal replay alone (single-SoT discipline). Falls back to a
+        direct store write when ``publish`` is None (tests + standalone
+        harnesses without a runtime sink).
+        """
+        payload: dict[str, Any] = {"scope": scope}
+        if fact_key:
+            payload["fact_key"] = fact_key
+            payload["fact_value"] = fact_value
+        if event_type:
+            payload["memory_event_type"] = event_type
+            payload["memory_event_payload"] = event_payload or {}
+        if publish is not None:
+            await publish(
+                room_id,
+                producer_id="memory.writer.1",
+                role="system",
+                event_type="memory.write",
+                payload=payload,
+            )
+            return
+        if fact_key:
+            self._room_memory.write_fact(room_id, scope, fact_key, fact_value)
+        if event_type:
+            self._room_memory.record_event(
+                room_id, scope, event_type, event_payload or {}
+            )
 
     async def generate_text(
         self,

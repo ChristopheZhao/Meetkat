@@ -3,6 +3,7 @@ from the room runtime, supervisor, and specialist prompt builders."""
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Iterable
 
@@ -16,6 +17,32 @@ def mas_scope(room_id: str) -> str:
 
 def agent_scope(room_id: str, role: str) -> str:
     return f"agent:{room_id}:{role}"
+
+
+def format_memory_recall_section(memory_recall: dict[str, Any] | None) -> str:
+    """Render a ``memory_recall`` dict as a prompt-ready section.
+
+    Returns an empty string when ``memory_recall`` is falsy or contains
+    nothing actionable (every nested container empty). Keeping the
+    formatting in one place stops drift across the four agent prompt
+    builders that consume recall.
+    """
+    if not memory_recall:
+        return ""
+    if not any(
+        memory_recall.get(key)
+        for key in (
+            "shared_facts",
+            "agent_local_facts",
+            "recent_shared_events",
+            "role_lessons",
+        )
+    ):
+        return ""
+    return (
+        "Memory recall (shared room scratchpad + your role-specific lessons + recent shared events):\n"
+        f"{json.dumps(memory_recall, ensure_ascii=False, indent=2)}\n\n"
+    )
 
 
 def memory_recall_for_role(

@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from decision_room.mas.types import RoutingDecision
+from decision_room.memory import LongTermLessonStore, RoomMemoryStore, mas_scope
 from decision_room.providers import ProviderRegistry
 from decision_room.routing.model_router import HybridModelRouter
 
@@ -37,7 +38,15 @@ class SupervisorTurnResult:
 
 
 class SupervisorAgent(BaseLLMAgent):
-    """Single-iteration supervisor agent wrapping ``LLMSupervisor``."""
+    """Single-iteration supervisor agent wrapping ``LLMSupervisor``.
+
+    Phase 3 moves the supervisor-plan persistence (previously inline in
+    ``CentralizedMASExecutor._record_supervisor_plan``) into this agent
+    so every agent owns its own memory write path uniformly. The
+    underlying ``LLMSupervisor`` already builds the plan-room prompt with
+    enough room state; recall integration goes through that path in
+    Phase 4 when the supervisor prompt builder gains a recall parameter.
+    """
 
     def __init__(
         self,
@@ -46,12 +55,16 @@ class SupervisorAgent(BaseLLMAgent):
         router: HybridModelRouter,
         use_background_threads: bool = True,
         transient_max_attempts: int = 2,
+        room_memory_store: RoomMemoryStore | None = None,
+        long_term_store: LongTermLessonStore | None = None,
     ) -> None:
         super().__init__(
             registry=registry,
             router=router,
             use_background_threads=use_background_threads,
             transient_max_attempts=transient_max_attempts,
+            room_memory_store=room_memory_store,
+            long_term_store=long_term_store,
         )
         # Build the underlying supervisor lazily on first use so the
         # circular-import surface stays small.
@@ -71,7 +84,50 @@ class SupervisorAgent(BaseLLMAgent):
             route_ctx=ctx.route_ctx,
             route=ctx.route,
         )
+        await self._persist_plan(
+            publish=ctx.publish,
+            room_id=ctx.snapshot.room_id,
+            round_index=ctx.round_index,
+            plan=plan,
+        )
         return SupervisorTurnResult(plan=plan, route=new_route, ctx=new_ctx)
+
+    async def _persist_plan(
+        self,
+        *,
+        publish: Any,
+        room_id: str,
+        round_index: int,
+        plan: Any,
+    ) -> None:
+        shared = mas_scope(room_id)
+        plan_payload = {
+            "round_index": round_index,
+            "phase": plan.phase.value,
+            "decision_focus": plan.decision_focus,
+            "current_focus": plan.current_focus,
+            "reason": plan.reason,
+            "open_questions": list(plan.open_questions),
+            "speakers": [item.to_payload() for item in plan.speakers],
+        }
+        await self.emit_memory_write(
+            publish=publish,
+            room_id=room_id,
+            scope=shared,
+            fact_key="latest_supervisor_plan",
+            fact_value=plan_payload,
+        )
+        await self.emit_memory_write(
+            publish=publish,
+            room_id=room_id,
+            scope=shared,
+            event_type="supervisor.plan",
+            event_payload={
+                "round_index": round_index,
+                "decision_focus": plan.decision_focus,
+                "speakers": [item.agent for item in plan.runnable_speakers()],
+            },
+        )
 
     def _get_supervisor(self) -> Any:
         if self._supervisor is None:

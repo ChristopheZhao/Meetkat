@@ -157,6 +157,8 @@ class LLMRoomExecutor:
         use_background_threads: bool = True,
         transient_max_attempts: int = 2,
         tool_registry: ToolRegistry | None = None,
+        room_memory_store: Any = None,
+        long_term_store: Any = None,
     ) -> None:
         self._registry = registry
         self._router = router
@@ -167,6 +169,8 @@ class LLMRoomExecutor:
         self._transient_max_attempts = max(1, transient_max_attempts)
         # Phase 2: every role runs as a real Agent. The orchestrator owns
         # the lifecycle but no longer the prompt/parse/retry details.
+        # Phase 3: agents share memory stores so host/specialist/synthesis
+        # recall blocks see the same state.
         # Importing lazily avoids a module-load cycle through agents/.
         from decision_room.agents import (
             HostAgent,
@@ -179,6 +183,8 @@ class LLMRoomExecutor:
             router=router,
             use_background_threads=use_background_threads,
             transient_max_attempts=self._transient_max_attempts,
+            room_memory_store=room_memory_store,
+            long_term_store=long_term_store,
         )
         self._tool_registry = tool_registry or default_tool_registry()
         self._host_agent = HostAgent(**agent_kwargs)

@@ -27,6 +27,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from decision_room.mas.types import MeetingPhase, RoutingDecision
+from decision_room.memory import (
+    LongTermLessonStore,
+    RoomMemoryStore,
+    agent_scope,
+    mas_scope,
+)
 from decision_room.providers import ProviderRegistry
 from decision_room.routing.model_router import HybridModelRouter
 from decision_room.tools import ToolRegistry, ToolResult
@@ -100,12 +106,16 @@ class SpecialistAgent(BaseLLMAgent):
         tool_registry: ToolRegistry | None = None,
         use_background_threads: bool = True,
         transient_max_attempts: int = 2,
+        room_memory_store: RoomMemoryStore | None = None,
+        long_term_store: LongTermLessonStore | None = None,
     ) -> None:
         super().__init__(
             registry=registry,
             router=router,
             use_background_threads=use_background_threads,
             transient_max_attempts=transient_max_attempts,
+            room_memory_store=room_memory_store,
+            long_term_store=long_term_store,
         )
         self._tool_registry = tool_registry
 
@@ -119,7 +129,13 @@ class SpecialistAgent(BaseLLMAgent):
         turn_task = str(extras.get("turn_task", "") or "")
         host_agenda = extras["host_agenda"]
         target_claim_ref = str(extras.get("target_claim_ref", "") or "")
+        # Phase 3: the specialist owns its own recall read. The orchestrator
+        # may still pre-supply ``memory_recall`` via extras for tests or for
+        # call sites that already fetched it (centralized executor used to
+        # do so before Phase 3), but the agent no longer requires it.
         memory_recall = extras.get("memory_recall")
+        if memory_recall is None:
+            memory_recall = self.read_memory_recall(ctx.snapshot.room_id, specialist.role)
         budget = max(1, int(getattr(specialist, "turn_budget", 1) or 1))
         scratchpad: list[ScratchpadEntry] = []
         last_action = "none"
@@ -155,6 +171,13 @@ class SpecialistAgent(BaseLLMAgent):
             last_action = decision.next_action
 
             if decision.next_action == "emit" and decision.output is not None:
+                await self._persist_claim(
+                    publish=ctx.publish,
+                    room_id=ctx.snapshot.room_id,
+                    role=specialist.role,
+                    round_index=ctx.round_index,
+                    output=decision.output,
+                )
                 return SpecialistTurnResult(
                     output=decision.output,
                     route=route,
@@ -207,6 +230,66 @@ class SpecialistAgent(BaseLLMAgent):
 
         raise AgentBudgetExhausted(
             role=specialist.role, budget=budget, last_action=last_action
+        )
+
+    async def _persist_claim(
+        self,
+        *,
+        publish: Any,
+        room_id: str,
+        role: str,
+        round_index: int,
+        output: Any,
+    ) -> None:
+        """Write this specialist's emitted claim back to memory.
+
+        Mirrors the pre-Phase-3 ``CentralizedMASExecutor._record_specialist_memory``
+        path now that agents own per-turn persistence. Shared scope carries
+        a ``latest_claim.{role}`` fact + a ``specialist.claim`` event so the
+        next round's host/supervisor/synthesis see what just happened; the
+        agent-local scope keeps a trimmed ``last_self_claim`` snapshot for
+        the role's own recall block.
+        """
+        shared = mas_scope(room_id)
+        local = agent_scope(room_id, role)
+        claim = getattr(output, "claim", "")
+        evidence = list(getattr(output, "evidence", []) or [])
+        confidence = float(getattr(output, "confidence", 0.0) or 0.0)
+        await self.emit_memory_write(
+            publish=publish,
+            room_id=room_id,
+            scope=shared,
+            fact_key=f"latest_claim.{role}",
+            fact_value={
+                "round_index": round_index,
+                "claim": claim,
+                "evidence": evidence,
+                "confidence": confidence,
+            },
+        )
+        await self.emit_memory_write(
+            publish=publish,
+            room_id=room_id,
+            scope=shared,
+            event_type="specialist.claim",
+            event_payload={
+                "role": role,
+                "round_index": round_index,
+                "claim": claim,
+                "confidence": confidence,
+            },
+        )
+        await self.emit_memory_write(
+            publish=publish,
+            room_id=room_id,
+            scope=local,
+            fact_key="last_self_claim",
+            fact_value={
+                "round_index": round_index,
+                "claim": claim,
+                "evidence": evidence[:3],
+                "confidence": confidence,
+            },
         )
 
     def _available_tool_descriptors(self) -> list[dict[str, Any]]:
