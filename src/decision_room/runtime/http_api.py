@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 from decision_room.dev_env import PROJECT_ROOT, load_local_dotenv
 from decision_room.orchestration import (
     CentralizedMASExecutor,
-    DemoAgentExecutor,
     HeuristicRequirementPlanner,
     LLMRequirementPlanner,
     LLMRoomExecutor,
@@ -25,15 +24,10 @@ from decision_room.orchestration import (
 from decision_room.policies.fallback import FallbackConfig
 from .room_runtime import RoomPreflightError, RoomRuntime, RoomStateError, RuntimeConfig
 
-
-class AsyncDemoExecutor:
-    """Async adapter so the demo topology can drive the real room runtime."""
-
-    def __init__(self) -> None:
-        self._delegate = DemoAgentExecutor()
-
-    async def build_round(self, snapshot: Any, round_index: int):
-        return self._delegate.build_round(snapshot, round_index)
+# Phase 5: ``AsyncDemoExecutor`` and the ``DemoAgentExecutor`` adapter
+# were removed from the product HTTP boundary. Tests and governance
+# harnesses that still want demo behavior should import
+# ``DemoAgentExecutor`` from ``decision_room.orchestration`` directly.
 
 
 def _build_requirement_planning_service(
@@ -139,17 +133,15 @@ def _build_executor(env: Mapping[str, str]) -> tuple[Any, dict[str, Any]]:
             "executor_targets": _executor_target_identities(env),
             "executor_guardrails": _executor_guardrails(env),
         }
-    if executor_mode == "demo":
-        return AsyncDemoExecutor(), {
-            "executor_mode": executor_mode,
-            "executor_ready": True,
-            "executor_reason": "",
-            "executor_missing_env": [],
-            "executor_targets": {},
-            "executor_guardrails": {},
-        }
+    # Phase 5: ``demo`` was removed as a product mode (MAS-harness baseline
+    # §10.12 forbids validation harnesses being default product entry
+    # sources). The ``DemoAgentExecutor`` is still available for tests
+    # under ``decision_room.orchestration`` but cannot be selected via
+    # this env var.
     raise RuntimeError(
-        "unsupported DECISION_ROOM_EXECUTOR; expected 'centralized', 'llm', or 'demo'"
+        "unsupported DECISION_ROOM_EXECUTOR; expected 'centralized' or 'llm'"
+        " (the 'demo' product mode was removed in Phase 5; use the executor"
+        " directly in tests instead)"
     )
 
 
@@ -268,13 +260,31 @@ def build_runtime_from_env(
     env: Mapping[str, str] | None = None,
     *,
     config: RuntimeConfig | None = None,
+    executor: Any | None = None,
 ) -> RoomRuntime:
+    """Build a ``RoomRuntime`` from environment variables.
+
+    Phase 5 removed ``DECISION_ROOM_EXECUTOR=demo`` from the product
+    surface. Tests and governance harnesses that previously relied on
+    that env value can now inject the executor directly via the
+    ``executor`` keyword (still kept env-driven for the product path).
+    """
     if env is None:
         load_local_dotenv(PROJECT_ROOT / ".env")
     env_map = dict(os.environ if env is None else env)
     planner_mode = env_map.get("DECISION_ROOM_PLANNER_MODE", "primary_with_fallback").strip().lower()
     requirement_planner = _build_requirement_planning_service(env_map)
-    executor, executor_status = _build_executor(env_map)
+    if executor is None:
+        executor, executor_status = _build_executor(env_map)
+    else:
+        executor_status = {
+            "executor_mode": "injected",
+            "executor_ready": True,
+            "executor_reason": "",
+            "executor_missing_env": [],
+            "executor_targets": {},
+            "executor_guardrails": {},
+        }
     readiness = {
         **_planner_readiness(planner_mode, requirement_planner, env_map),
         **executor_status,

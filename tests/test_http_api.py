@@ -1,9 +1,25 @@
 import asyncio
 import unittest
+from typing import Any
 from unittest import mock
 
+from decision_room.orchestration import DemoAgentExecutor
 from decision_room.runtime.http_api import build_runtime_from_env
 from decision_room.runtime.room_runtime import RuntimeConfig
+
+
+class _AsyncDemoExecutor:
+    """Phase 5: this lived inside http_api.py until the demo product mode
+    was removed. Tests that exercise the demo path now wrap the
+    ``DemoAgentExecutor`` here and inject it via ``build_runtime_from_env``'s
+    ``executor`` kwarg.
+    """
+
+    def __init__(self) -> None:
+        self._delegate = DemoAgentExecutor()
+
+    async def build_round(self, snapshot: Any, round_index: int):
+        return self._delegate.build_round(snapshot, round_index)
 
 
 class HttpApiRuntimeBootstrapTests(unittest.IsolatedAsyncioTestCase):
@@ -24,16 +40,14 @@ class HttpApiRuntimeBootstrapTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         self.runtime = build_runtime_from_env(
-            {
-                "DECISION_ROOM_EXECUTOR": "demo",
-                "DECISION_ROOM_PLANNER_MODE": "fallback_only",
-            },
+            {"DECISION_ROOM_PLANNER_MODE": "fallback_only"},
             config=RuntimeConfig(
                 message_chunk_delay_sec=0.0,
                 between_turn_delay_sec=0.0,
                 between_round_delay_sec=0.0,
                 max_rounds=4,
             ),
+            executor=_AsyncDemoExecutor(),
         )
 
         snapshot = await self.runtime.create_room(
@@ -58,11 +72,9 @@ class HttpApiRuntimeBootstrapTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_build_runtime_from_env_exposes_preflight_payload(self) -> None:
         self.runtime = build_runtime_from_env(
-            {
-                "DECISION_ROOM_EXECUTOR": "demo",
-                "DECISION_ROOM_PLANNER_MODE": "fallback_only",
-            },
+            {"DECISION_ROOM_PLANNER_MODE": "fallback_only"},
             config=RuntimeConfig(),
+            executor=_AsyncDemoExecutor(),
         )
 
         preflight = self.runtime.preflight_room(
