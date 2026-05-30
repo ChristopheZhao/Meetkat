@@ -70,6 +70,11 @@ from .room_executor import (
     _route_artifact,
     _target,
     _visible_open_questions,
+    phase_for_round,
+    resolve_focus,
+    resolve_round_end_signal,
+    signals_after_round,
+    signals_for_round,
 )
 
 
@@ -100,17 +105,20 @@ class CentralizedMASExecutor:
         self._coordination = coordination or HybridCoordinationStrategy()
         self._consensus = consensus or HybridConsensusStrategy()
         self._planner = planner or HybridPlanningStrategy()
-        # Internal specialist machinery is owned by an LLMRoomExecutor so all
-        # specialist prompts, retries, and parsers stay in one place.
-        self._specialist_runner = LLMRoomExecutor(
+        # Phase 2: specialist + synthesis now run as ``Agent`` instances. The
+        # central path stops reaching into LLMRoomExecutor's private methods —
+        # the old ``self._specialist_runner = LLMRoomExecutor(...)`` shim is
+        # gone along with its six ``# noqa: SLF001`` cross-calls.
+        from decision_room.agents import SpecialistAgent, SynthesisAgent
+
+        agent_kwargs = dict(
             registry=registry,
             router=router,
-            planner=self._planner,
-            coordination=self._coordination,
-            consensus=self._consensus,
             use_background_threads=use_background_threads,
             transient_max_attempts=transient_max_attempts,
         )
+        self._specialist_agent = SpecialistAgent(**agent_kwargs)
+        self._synthesis_agent = SynthesisAgent(**agent_kwargs)
         self._transient_max_attempts = max(1, transient_max_attempts)
         self._room_memory = room_memory_store or default_room_memory_store()
         self._long_term = long_term_store or default_long_term_store()
@@ -157,9 +165,10 @@ class CentralizedMASExecutor:
         *,
         publish: Any = None,
     ) -> RoomRound:
-        runner = self._specialist_runner
-        phase = runner._phase_for_round(snapshot, round_index)  # noqa: SLF001
-        routing_signals = runner._signals_for_round(snapshot, round_index)  # noqa: SLF001
+        from decision_room.agents import TurnContext
+
+        phase = phase_for_round(snapshot, round_index)
+        routing_signals = signals_for_round(snapshot, round_index)
         topic = snapshot.topic or "centralized MAS decision room"
         ctx = DecisionContext(
             room_id=snapshot.room_id,
@@ -168,7 +177,7 @@ class CentralizedMASExecutor:
             metadata={"topic": topic, "topology": "centralized_supervisor"},
         )
         plan_decision = self._planner.plan(ctx)
-        next_focus = runner._resolve_focus(snapshot, plan_decision.next_focus)  # noqa: SLF001
+        next_focus = resolve_focus(snapshot, plan_decision.next_focus)
         route_ctx = ctx
         route = self._router.route(route_ctx)
 
@@ -222,40 +231,43 @@ class CentralizedMASExecutor:
                 room_store=self._room_memory,
                 long_term_store=self._long_term,
             )
-            # Pass the publish callback into the local-write path so the
-            # next iteration's recall sees the prior speaker's claim via
-            # journal-anchored projection.
-            # The supervisor only provides an optional ``focus_angle`` hint —
-            # the specialist authors its own claim, evidence, and confidence.
-            # We pass the hint through ``turn_task`` for backward signature
-            # compatibility with the host-led specialist generator.
-            output, route_ctx, turn_route = await runner._generate_argument(  # noqa: SLF001
+            # Phase 2: specialist authors its own claim through SpecialistAgent.
+            # The supervisor only emits an optional focus_angle hint; the agent
+            # owns its own ReAct loop (bounded by ``CandidateSpecialist.turn_budget``)
+            # and any tool calls. Memory recall stays a centralized-topology
+            # concern for one more phase — Phase 3 wires recall through the
+            # agent itself instead of the orchestrator.
+            specialist_ctx = TurnContext(
+                snapshot=snapshot,
+                round_index=round_index,
+                phase=phase,
+                next_focus=next_focus,
                 route_ctx=route_ctx,
                 route=route,
-                specialist=specialist,
-                turn_task=slot.focus_angle,
-                snapshot=snapshot,
-                phase=phase,
-                round_index=round_index,
-                next_focus=next_focus,
-                host_agenda=host_agenda,
-                target_claim_ref=target_claim_ref,
-                memory_recall=recall,
+                publish=publish,
+                extras={
+                    "specialist": specialist,
+                    "turn_task": slot.focus_angle,
+                    "host_agenda": host_agenda,
+                    "target_claim_ref": target_claim_ref,
+                    "memory_recall": recall,
+                },
             )
-            route = turn_route
+            specialist_result = await self._specialist_agent.run(specialist_ctx)
+            route_ctx = specialist_result.ctx
+            route = specialist_result.route
+            output = specialist_result.output
             turn_results.append(
                 SpecialistTurnResult(
                     specialist=specialist,
                     task=slot.focus_angle,
                     output=output,
-                    route=turn_route,
+                    route=route,
                 )
             )
             target_claim_ref = output.claim
-            # Persist this specialist's claim. When a journal publish callback
-            # is supplied, writes go through memory.write events so the
-            # RoomEventJournal stays single SoT and the local store updates
-            # via projector dispatch (RoomProjector._apply_memory_write).
+            # Persist this specialist's claim through the journal so memory
+            # rebuilds via replay (RoomProjector._apply_memory_write).
             await self._record_specialist_memory(
                 publish=publish,
                 room_id=room_id,
@@ -264,16 +276,20 @@ class CentralizedMASExecutor:
                 output=output,
             )
 
-        synthesis_output, route_ctx, synthesis_route = await runner._generate_synthesis(  # noqa: SLF001
+        synthesis_ctx = TurnContext(
+            snapshot=snapshot,
+            round_index=round_index,
+            phase=phase,
+            next_focus=next_focus,
             route_ctx=route_ctx,
             route=route,
-            snapshot=snapshot,
-            phase=phase,
-            round_index=round_index,
-            next_focus=next_focus,
-            host_agenda=host_agenda,
-            turn_results=turn_results,
+            publish=publish,
+            extras={"host_agenda": host_agenda, "turn_results": turn_results},
         )
+        synthesis_result = await self._synthesis_agent.run(synthesis_ctx)
+        route_ctx = synthesis_result.ctx
+        synthesis_route = synthesis_result.route
+        synthesis_output = synthesis_result.output
 
         open_questions = _dedupe_strings(
             [
@@ -283,7 +299,7 @@ class CentralizedMASExecutor:
             ],
             limit=6,
         )
-        post_signals = runner._signals_after_round(  # noqa: SLF001
+        post_signals = signals_after_round(
             snapshot=snapshot,
             round_index=round_index,
             open_questions=open_questions,
@@ -343,7 +359,7 @@ class CentralizedMASExecutor:
             f"{synthesis_output.conclusion_reason} Consensus score {consensus.score:.2f}. "
             f"{consensus.reason}."
         )
-        should_end, end_reason = runner._resolve_round_end_signal(  # noqa: SLF001
+        should_end, end_reason = resolve_round_end_signal(
             snapshot=snapshot,
             round_index=round_index,
             synthesis_output=synthesis_output,
