@@ -31,6 +31,28 @@ class TranscriptEntry:
 
 
 @dataclass
+class ToolCallRecord:
+    """Journal-projected view of one tool invocation by an agent.
+
+    Populated from ``agent.tool_call`` (status="pending") and updated by the
+    matching ``agent.tool_result`` (status="ok" or "error"). The record is
+    keyed by ``call_id`` so a tool that takes time to return still surfaces
+    in the snapshot as in-flight.
+    """
+
+    call_id: str
+    tool_name: str
+    agent_role: str
+    args: dict[str, Any] = field(default_factory=dict)
+    seq: int = 0
+    ts_ms: int = 0
+    status: str = "pending"
+    result: Any = None
+    error: str = ""
+    latency_ms: int = 0
+
+
+@dataclass
 class ConsensusState:
     score: float = 0.0
     should_end: bool = False
@@ -60,6 +82,7 @@ class RoomSnapshot:
     participants: list[Participant] = field(default_factory=list)
     transcript: list[TranscriptEntry] = field(default_factory=list)
     live_chunks: dict[str, str] = field(default_factory=dict)
+    tool_calls: list[ToolCallRecord] = field(default_factory=list)
     consensus: ConsensusState = field(default_factory=ConsensusState)
     candidate_decision: str = ""
     action_items: list[str] = field(default_factory=list)
