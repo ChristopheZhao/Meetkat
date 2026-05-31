@@ -54,12 +54,6 @@ class RoomSession:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
-class RoomPreflightError(RuntimeError):
-    def __init__(self, preflight_payload: dict[str, Any]) -> None:
-        super().__init__("room preflight blocked normal room start")
-        self.preflight_payload = preflight_payload
-
-
 class _LessonSnapshotView:
     """Tiny adapter exposing dict-shaped snapshots as attribute access for
     ``persist_meeting_lessons_from_snapshot``. Avoids forcing the memory
@@ -129,7 +123,6 @@ class RoomRuntime:
         requirement: str,
         mode: str = "agent_first",
         allow_planner_fallback: bool = False,
-        require_preflight_ready: bool = False,
         entry_scope: str | None = None,
         operator_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -142,10 +135,6 @@ class RoomRuntime:
             allow_planner_fallback=allow_planner_fallback,
             operator_context=resolved_operator_context,
         )
-        if require_preflight_ready and not room_start_contract.room_start_ready:
-            raise RoomPreflightError(
-                self._preflight_payload(plan, room_start_contract, resolved_operator_context)
-            )
         room_id = f"room_{uuid.uuid4().hex[:8]}"
         session = RoomSession(
             room_id=room_id,
@@ -262,7 +251,6 @@ class RoomRuntime:
             allow_fallback=allow_planner_fallback,
         )
         room_start_contract = build_room_start_contract(
-            operator_required_inputs=plan.room_start_contract_draft.operator_required_inputs,
             contextual_open_questions=plan.room_start_contract_draft.contextual_open_questions,
             runtime_readiness=self._runtime_readiness,
             operator_context=operator_context,

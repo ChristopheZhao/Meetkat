@@ -26,12 +26,10 @@ SYSTEM_CONSTRAINTS = [
 
 @dataclass(frozen=True)
 class RoomStartContractDraft:
-    operator_required_inputs: list[str] = field(default_factory=list)
     contextual_open_questions: list[str] = field(default_factory=list)
 
     def to_payload(self) -> dict[str, object]:
         return {
-            "operator_required_inputs": list(self.operator_required_inputs),
             "contextual_open_questions": list(self.contextual_open_questions),
         }
 
@@ -44,12 +42,7 @@ class RoomStartContractDraft:
                 status_code=502,
                 can_fallback=True,
             )
-        # operator_required_inputs is intentionally forced empty: clarifications
-        # are an in-meeting agent dialogue, not a pre-room slot-filling form.
-        # Anything the planner may still emit here is discarded so it cannot
-        # silently revive the deprecated preflight-as-gate UX.
         return cls(
-            operator_required_inputs=[],
             contextual_open_questions=_require_string_list(
                 payload.get("contextual_open_questions", []),
                 "room_start_contract.contextual_open_questions",
@@ -280,7 +273,6 @@ class HeuristicRequirementPlanner:
             ],
             current_focus="diagnose the planner failure before proceeding with agent-led discussion",
             room_start_contract=RoomStartContractDraft(
-                operator_required_inputs=[],
                 contextual_open_questions=[
                     "What blocked the primary requirement planner, and should the room creation be retried after fixing it?"
                 ],
@@ -319,7 +311,6 @@ def build_requirement_planner_prompts(requirement: str) -> tuple[str, str]:
         "Turn one user requirement into a meeting brief for downstream agents. "
         "The meeting brief is the intelligent entry point; do not reduce the requirement to a rigid workflow. "
         "Do not invent hard constraints that are not grounded in the requirement or the system invariants provided. "
-        "Do NOT collect 'operator-required inputs' as a pre-room slot list. "
         "When the requirement is ambiguous, surface the ambiguity in open_questions / "
         "contextual_open_questions and trust the supervisor and specialist agents to "
         "ask the operator a clarifying question during the meeting through the room's "
@@ -337,7 +328,6 @@ def build_requirement_planner_prompts(requirement: str) -> tuple[str, str]:
         "- Extract only real hard constraints from the requirement and invariants.\n"
         "- If the requirement is underspecified, list 2-5 raw open_questions for downstream agents to surface in-meeting.\n"
         "- Mirror those (or refine them) into room_start_contract.contextual_open_questions so the room knows what ambiguity to address.\n"
-        "- Never emit operator_required_inputs — clarifications are an in-meeting conversation, not a pre-room form.\n"
         "- Produce the first-round current_focus for the host agent.\n\n"
         "Output schema example:\n"
         f"{json.dumps(schema, ensure_ascii=False, indent=2)}"

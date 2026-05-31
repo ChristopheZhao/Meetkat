@@ -69,7 +69,7 @@ LLM provider config lives in `.env` (see `.env.example`). The default profile as
 - ✅ Specialist ReAct loop with autonomous challenge / refusal under role contracts
 - ✅ Tool registry + MCP adapter wired into the agent loop
 - ✅ Measured convergence signals (claim clustering, support / confidence / disagreement scores)
-- 🚧 Native-agent clarification cutover (removing remaining preflight-form residue in favor of in-meeting dialogue)
+- ✅ Native-agent clarification: requirement ambiguity is resolved inside the meeting via the supervisor's clarification protocol and the room's human-message channel; preflight is now infra-only (provider/env/transport) and never gates room start on operator inputs
 - 🚧 Cross-meeting decision index (`docs/decisions/INDEX.md` auto-generation)
 - 🚧 Tool extension SDK — contributor-facing docs and examples for third-party tool authors
 

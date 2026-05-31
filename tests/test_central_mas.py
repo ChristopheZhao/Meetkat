@@ -431,40 +431,28 @@ class NativeAgentClarificationContractTests(unittest.TestCase):
     dialogue, not a pre-room slot-filling form. These tests guard against
     the deprecated preflight-gate UX silently coming back."""
 
-    def test_planner_prompt_forbids_operator_required_inputs(self) -> None:
+    def test_planner_prompt_keeps_conversation_first_clarification_path(self) -> None:
         from decision_room.orchestration.brief_planner import (
             build_requirement_planner_prompts,
         )
 
-        system_prompt, user_prompt = build_requirement_planner_prompts(
+        system_prompt, _user_prompt = build_requirement_planner_prompts(
             "Should we adopt event-sourcing?"
         )
-        combined = system_prompt + "\n" + user_prompt
-        # Schema example must not include the deprecated slot-filling key.
-        self.assertNotIn(
-            '"operator_required_inputs"',
-            user_prompt,
-            "operator_required_inputs must not appear as a JSON schema key the planner is asked to fill",
-        )
-        # Prose must explicitly forbid it and explain the in-meeting alternative.
-        self.assertIn("Never emit operator_required_inputs", user_prompt)
         self.assertIn("conversation-first", system_prompt)
         self.assertIn("human-message channel", system_prompt)
 
-    def test_room_start_contract_draft_discards_operator_required_inputs(self) -> None:
+    def test_room_start_contract_draft_has_no_operator_required_inputs_slot(self) -> None:
         from decision_room.orchestration.brief_planner import RoomStartContractDraft
 
         draft = RoomStartContractDraft.from_payload(
             {
-                "operator_required_inputs": [
-                    "Define the target cohort",
-                    "Specify the budget",
-                ],
                 "contextual_open_questions": ["What is the success metric?"],
             }
         )
-        self.assertEqual(draft.operator_required_inputs, [])
+        self.assertFalse(hasattr(draft, "operator_required_inputs"))
         self.assertEqual(draft.contextual_open_questions, ["What is the success metric?"])
+        self.assertNotIn("operator_required_inputs", draft.to_payload())
 
     def test_supervisor_prompt_grants_clarification_license(self) -> None:
         from decision_room.mas.types import MeetingPhase

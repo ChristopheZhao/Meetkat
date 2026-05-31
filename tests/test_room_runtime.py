@@ -11,7 +11,6 @@ from decision_room.orchestration.brief_planner import (
 from decision_room.orchestration.room_executor import RoomMessage, RoomRound
 from decision_room.runtime.room_projector import RoomProjector
 from decision_room.runtime.room_runtime import (
-    RoomPreflightError,
     RoomRuntime,
     RoomStateError,
     RuntimeConfig,
@@ -46,10 +45,6 @@ class PreflightPlanner:
             ],
             current_focus="separate hard external prerequisites from contextual follow-up questions before the room starts",
             room_start_contract=RoomStartContractDraft(
-                operator_required_inputs=[
-                    "specific provider identity for the room must be explicit before room start",
-                    "success criteria for this validation run must be explicit before room start",
-                ],
                 contextual_open_questions=[
                     "whether an existing host agent implementation already enforces topology leadership can stay a contextual in-room question"
                 ],
@@ -76,11 +71,6 @@ class ContextAwarePreflightPlanner:
             ],
             current_focus="answer runtime-known versus operator-supplied validation questions before room start",
             room_start_contract=RoomStartContractDraft(
-                operator_required_inputs=[
-                    "primary planner provider identity must be known before room start",
-                    "brief_source must be explicit before room start",
-                    "validation trigger scenario must be explicit before room start",
-                ],
                 contextual_open_questions=[
                     "planner binding readiness signal should stay explicit for this room",
                     "transport fidelity contract should stay explicit for this room",
@@ -593,7 +583,7 @@ class RoomRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "orchestration signaled a stable follow-up handoff",
         )
 
-    async def test_preflight_room_separates_hard_prerequisites_from_contextual_questions(self) -> None:
+    async def test_preflight_room_surfaces_planner_open_questions_as_contextual_only(self) -> None:
         self.runtime = RoomRuntime(
             executor=BlockingRoomExecutor(),
             config=self._fast_runtime_config(),
@@ -610,38 +600,31 @@ class RoomRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "Need a real provider-backed room run that validates the topology without demo fallback."
         )
 
-        self.assertFalse(preflight["room_start_contract"]["room_start_ready"])
+        room_start_contract = preflight["room_start_contract"]
+        # Infra preflight is the only gate. Planner-emitted open questions never
+        # block room start — they surface as contextual signals for the in-meeting
+        # supervisor / specialists to address.
+        self.assertTrue(room_start_contract["room_start_ready"])
+        self.assertTrue(room_start_contract["runtime_bootstrap_ready"])
+        self.assertEqual(room_start_contract["system_blockers"], [])
         self.assertEqual(
-            preflight["room_start_contract"]["missing_operator_inputs"],
-            [
-                "specific provider identity for the room must be explicit before room start",
-                "success criteria for this validation run must be explicit before room start",
-            ],
-        )
-        self.assertEqual(
-            preflight["room_start_contract"]["contextual_open_questions"],
+            room_start_contract["contextual_open_questions"],
             [
                 "whether an existing host agent implementation already enforces topology leadership can stay a contextual in-room question",
             ],
         )
-        self.assertEqual(preflight["room_start_contract"]["system_blockers"], [])
+        self.assertNotIn("missing_operator_inputs", room_start_contract)
 
-    async def test_preflight_room_downgrades_provider_identity_when_runtime_targets_are_known(self) -> None:
+    async def test_preflight_room_marks_runtime_bootstrap_as_blocker(self) -> None:
         self.runtime = RoomRuntime(
             executor=BlockingRoomExecutor(),
             config=self._fast_runtime_config(),
             requirement_planner=RequirementPlanningService(primary_planner=PreflightPlanner()),
             runtime_readiness={
-                "primary_planner_ready": True,
+                "primary_planner_ready": False,
                 "executor_ready": True,
-                "primary_unavailable_reason": "",
+                "primary_unavailable_reason": "missing planner env",
                 "executor_reason": "",
-                "planner_target": {"supplier": "openai", "model": "gpt-default"},
-                "executor_targets": {
-                    "default": {"supplier": "openai", "model": "gpt-default"},
-                    "escalation": {"supplier": "openai", "model": "gpt-escalation"},
-                    "fallback": {"supplier": "openai", "model": "gpt-fallback"},
-                },
             },
         )
 
@@ -649,18 +632,11 @@ class RoomRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "Need a real provider-backed room run that validates the topology without demo fallback."
         )
 
-        self.assertFalse(preflight["room_start_contract"]["room_start_ready"])
-        self.assertEqual(
-            preflight["room_start_contract"]["missing_operator_inputs"],
-            ["success criteria for this validation run must be explicit before room start"],
-        )
-        self.assertEqual(
-            preflight["room_start_contract"]["contextual_open_questions"],
-            [
-                "whether an existing host agent implementation already enforces topology leadership can stay a contextual in-room question",
-            ],
-        )
-        self.assertEqual(preflight["room_start_contract"]["system_blockers"], [])
+        room_start_contract = preflight["room_start_contract"]
+        self.assertFalse(room_start_contract["room_start_ready"])
+        self.assertFalse(room_start_contract["runtime_bootstrap_ready"])
+        self.assertEqual(room_start_contract["system_blockers"], ["missing planner env"])
+        self.assertEqual(room_start_contract["recommended_surface"], "runtime_readiness")
 
     async def test_preflight_room_uses_operator_context_to_answer_validation_contract_questions(self) -> None:
         self.runtime = RoomRuntime(
@@ -711,8 +687,8 @@ class RoomRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(preflight["room_start_contract"]["room_start_ready"])
         self.assertEqual(preflight["room_start_contract"]["contextual_open_questions"], [])
-        self.assertEqual(preflight["room_start_contract"]["missing_operator_inputs"], [])
         self.assertEqual(preflight["room_start_contract"]["system_blockers"], [])
+        self.assertNotIn("missing_operator_inputs", preflight["room_start_contract"])
         self.assertEqual(preflight["operator_context"]["brief_source"], "agent")
         self.assertEqual(
             preflight["runtime_context"]["planner_target"]["supplier"],
@@ -767,7 +743,10 @@ class RoomRuntimeTests(unittest.IsolatedAsyncioTestCase):
                 entry_scope="provider_validation_smoke",
             )
 
-    async def test_create_room_can_require_preflight_readiness(self) -> None:
+    async def test_create_room_opens_even_when_planner_left_open_questions(self) -> None:
+        # Architectural assertion: the legacy preflight-as-clarification-gate is
+        # gone. A room with planner-emitted contextual open questions still opens
+        # immediately; clarification happens inside the meeting.
         self.runtime = RoomRuntime(
             executor=BlockingRoomExecutor(),
             config=self._fast_runtime_config(),
@@ -780,14 +759,12 @@ class RoomRuntimeTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        with self.assertRaises(RoomPreflightError) as ctx:
-            await self.runtime.create_room(
-                requirement="Need a real provider-backed room run that validates the topology without demo fallback.",
-                require_preflight_ready=True,
-            )
+        snapshot = await self.runtime.create_room(
+            requirement="Need a real provider-backed room run that validates the topology without demo fallback.",
+        )
 
-        self.assertFalse(ctx.exception.preflight_payload["room_start_contract"]["room_start_ready"])
-        self.assertEqual(len(self.runtime.list_rooms()), 0)
+        self.assertEqual(snapshot["status"], "running")
+        self.assertEqual(len(self.runtime.list_rooms()), 1)
 
     async def test_create_room_persists_preflight_payload_in_planning_artifacts(self) -> None:
         self.runtime = RoomRuntime(
@@ -806,8 +783,9 @@ class RoomRuntimeTests(unittest.IsolatedAsyncioTestCase):
             requirement="Need a real provider-backed room run that validates the topology without demo fallback."
         )
 
-        self.assertIn("room_start_contract", snapshot["planning_artifacts"])
-        self.assertFalse(snapshot["planning_artifacts"]["room_start_contract"]["room_start_ready"])
+        room_start_contract = snapshot["planning_artifacts"]["room_start_contract"]
+        self.assertTrue(room_start_contract["room_start_ready"])
+        self.assertNotIn("missing_operator_inputs", room_start_contract)
         self.assertIn("runtime_context", snapshot["planning_artifacts"])
         self.assertNotIn("room_start_contract_draft", snapshot["planning_artifacts"])
         self.assertNotIn("open_questions", snapshot["planning_artifacts"])
@@ -933,6 +911,218 @@ class RoomRuntimeTests(unittest.IsolatedAsyncioTestCase):
             "advance into the next implementation slice",
             ended_events[0]["payload"]["conclusion_reason"],
         )
+
+    async def test_vague_requirement_opens_room_and_clarifies_in_meeting(self) -> None:
+        # PLAN-012 architectural assertion: a deliberately vague requirement
+        # must open the room immediately (no preflight clarification gate), let
+        # the supervisor surface a clarification through the in-meeting
+        # human-message channel, accept the human's reply, converge, and end
+        # with an exportable decision record.
+        from decision_room.runtime.decision_record import render_decision_record
+
+        clarifying_question = (
+            "[Awaiting operator clarification] which cohort and budget should "
+            "we plan around?"
+        )
+
+        class ClarificationThenConvergeExecutor:
+            def __init__(self) -> None:
+                self.rounds_seen = 0
+                self.last_human_messages: list[str] = []
+                self.human_reply_received = asyncio.Event()
+
+            async def build_round(self, snapshot, round_index: int) -> RoomRound:
+                self.rounds_seen = round_index
+                if round_index >= 2:
+                    # Block converging round until the operator's reply has been
+                    # observed in the snapshot — that's the architectural point:
+                    # the next round only proceeds after in-meeting clarification.
+                    await self.human_reply_received.wait()
+                self.last_human_messages.append(
+                    str(getattr(snapshot, "last_human_message", "") or "")
+                )
+                if round_index == 1:
+                    return RoomRound(
+                        phase=MeetingPhase.EXPLORE,
+                        signals=DecisionSignals(
+                            support=0.30,
+                            confidence=0.35,
+                            risk_penalty=0.20,
+                            margin_top1_top2=0.05,
+                            disagreement_index=0.55,
+                        ),
+                        plan_topic=snapshot.topic,
+                        next_focus=clarifying_question,
+                        coordination=CoordinationAction(
+                            action_type=ActionType.SPEAK,
+                            reason="ask the operator a clarifying question before recruiting specialists",
+                            target_role="host",
+                        ),
+                        consensus_score=0.30,
+                        consensus_should_end=False,
+                        should_end=False,
+                        consensus_reason="awaiting operator clarification before evidence collection",
+                        end_reason="",
+                        messages=[
+                            RoomMessage(
+                                role="host",
+                                title="Awaiting operator clarification",
+                                text=clarifying_question,
+                                artifacts={
+                                    "decision_focus": clarifying_question,
+                                    "next_focus": clarifying_question,
+                                    "round_goal": "resolve the requirement ambiguity in-meeting",
+                                    "target_roles": [],
+                                    "turns": [],
+                                    "focus_points": [],
+                                    "awaiting_human_clarification": True,
+                                },
+                            ),
+                        ],
+                        decision_candidate="",
+                        action_items=[],
+                        open_questions=[clarifying_question],
+                        summary_text="awaiting operator clarification; no synthesis yet",
+                        conclusion_type="",
+                        conclusion_reason="",
+                        synthesis_message=RoomMessage(
+                            role="synthesis",
+                            title="Awaiting clarification",
+                            text="No synthesis yet — round is paused on operator clarification.",
+                            artifacts={
+                                "agreement": [],
+                                "disagreement": [],
+                                "decision_candidate": "",
+                                "action_item_draft": [],
+                                "conclusion_type": "",
+                                "conclusion_reason": "",
+                                "should_end_meeting": False,
+                            },
+                        ),
+                    )
+                return RoomRound(
+                    phase=MeetingPhase.SYNTHESIZE,
+                    signals=DecisionSignals(
+                        support=0.82,
+                        confidence=0.84,
+                        risk_penalty=0.08,
+                        margin_top1_top2=0.16,
+                        disagreement_index=0.20,
+                    ),
+                    plan_topic=snapshot.topic,
+                    next_focus="commit to the cohort/budget the operator clarified",
+                    coordination=CoordinationAction(
+                        action_type=ActionType.CHECK_CONSENSUS,
+                        reason="operator clarified scope; converge",
+                        target_role="implementation_specialist",
+                    ),
+                    consensus_score=0.83,
+                    consensus_should_end=True,
+                    should_end=True,
+                    consensus_reason="operator clarified ambiguity in-meeting",
+                    end_reason="operator clarification accepted",
+                    messages=[
+                        RoomMessage(
+                            role="host",
+                            title="Round focus",
+                            text="Operator clarified scope; specialists converge on the recommendation.",
+                            artifacts={
+                                "next_focus": "commit to the cohort/budget the operator clarified",
+                                "round_goal": "produce a candidate decision grounded in the operator clarification",
+                                "target_roles": ["implementation_specialist"],
+                                "turns": [
+                                    {
+                                        "role": "implementation_specialist",
+                                        "task": "Lock in the recommendation against the cohort/budget the operator named.",
+                                    }
+                                ],
+                                "focus_points": [],
+                            },
+                        ),
+                        RoomMessage(
+                            role="implementation_specialist",
+                            title="Implementation readout",
+                            text="Recommendation is feasible under the clarified cohort/budget.",
+                            artifacts={
+                                "claim": "Proceed with the change for the clarified cohort within the stated budget.",
+                                "evidence": ["operator-supplied scope", "stated budget envelope"],
+                                "confidence": 0.82,
+                                "target_claim_ref": "",
+                            },
+                        ),
+                    ],
+                    decision_candidate="Proceed with the change for the operator-clarified cohort within the stated budget.",
+                    action_items=["Document the cohort/budget that drove the decision."],
+                    open_questions=[],
+                    summary_text="Operator clarified the cohort and budget; the room converged.",
+                    conclusion_type="candidate_ready",
+                    conclusion_reason="Operator clarified the ambiguity in-meeting and the room converged on a candidate decision.",
+                    synthesis_message=RoomMessage(
+                        role="synthesis",
+                        title="Synthesis note",
+                        text="Operator clarified the cohort and budget; the room converged.",
+                        artifacts={
+                            "agreement": ["Scope and budget are now explicit."],
+                            "disagreement": [],
+                            "decision_candidate": "Proceed with the change for the operator-clarified cohort within the stated budget.",
+                            "action_item_draft": ["Document the cohort/budget that drove the decision."],
+                            "conclusion_type": "candidate_ready",
+                            "conclusion_reason": "Operator clarified the ambiguity in-meeting and the room converged on a candidate decision.",
+                            "should_end_meeting": True,
+                        },
+                    ),
+                )
+
+        executor = ClarificationThenConvergeExecutor()
+        self.runtime = RoomRuntime(
+            executor=executor,
+            config=self._fast_runtime_config(),
+            requirement_planner=RequirementPlanningService(primary_planner=StaticPlanner()),
+            runtime_readiness={
+                "primary_planner_ready": True,
+                "executor_ready": True,
+                "primary_unavailable_reason": "",
+                "executor_reason": "",
+            },
+        )
+
+        snapshot = await self.runtime.create_room(
+            requirement="我们要不要做这个改造",
+            entry_scope="interactive_room_start",
+        )
+        room_id = snapshot["room_id"]
+        # No clarification gate exists anymore: the room opens immediately.
+        self.assertEqual(snapshot["status"], "running")
+
+        await self._wait_until(
+            lambda: any(
+                event["event_type"] == "agent.message"
+                and event["role"] == "host"
+                and event["payload"].get("artifacts", {}).get("awaiting_human_clarification") is True
+                for event in self.runtime.replay(room_id)
+            ),
+            timeout=2.0,
+        )
+
+        human_reply = "针对企业客户群体，本年度预算 200k 人民币。"
+        await self.runtime.post_human_message(room_id, human_reply)
+        executor.human_reply_received.set()
+
+        await self._wait_until(
+            lambda: self.runtime.get_snapshot(room_id)["status"] == "ended",
+            timeout=2.0,
+        )
+
+        final = self.runtime.get_snapshot(room_id)
+        self.assertEqual(final["conclusion_type"], "candidate_ready")
+        self.assertEqual(final["last_human_message"], human_reply)
+        # The executor saw the human reply between round 1 and round 2.
+        self.assertEqual(executor.last_human_messages[0], "")
+        self.assertEqual(executor.last_human_messages[1], human_reply)
+
+        record = render_decision_record(final)
+        self.assertIn("决策会议记录", record)
+        self.assertIn("Proceed with the change", record)
 
 
 if __name__ == "__main__":

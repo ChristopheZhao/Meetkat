@@ -30,7 +30,6 @@ import {
   readPlanningText,
   readPlannedSpecialists,
   readPreflightBoolean,
-  readPreflightList,
   readPreflightValue,
   readRuntimeExecutorTargets,
   readRuntimePlannerTarget,
@@ -212,7 +211,6 @@ export function RoomPage() {
   const plannerTarget = readRuntimePlannerTarget(snapshot);
   const executorTargets = readRuntimeExecutorTargets(snapshot);
   const operatorContractSections = readProductOperatorContractSections(snapshot);
-  const missingOperatorInputs = readPreflightList(snapshot, "missing_operator_inputs");
   const centralMas = readLatestCentralMasState(snapshot);
   const speakers = centralMas?.speakers ?? [];
   const centralTopology = centralMas?.topology ?? "";
@@ -365,18 +363,6 @@ export function RoomPage() {
                 </div>
               ))
             )}
-            {missingOperatorInputs.length > 0 ? (
-              <div className={styles.contractSection}>
-                <span className={styles.sectionLabel}>
-                  规划器提到的开放问题（智能体会在会中主动问你）
-                </span>
-                <ul className={styles.questionList}>
-                  {missingOperatorInputs.map((item) => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
           </section>
 
           <section className={styles.panelCard}>

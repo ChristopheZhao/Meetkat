@@ -112,7 +112,6 @@ async def run(args: argparse.Namespace) -> int:
         print(f"\n=== 创建会议室 ===\n需求：{args.requirement}\n")
         snapshot = await runtime.create_room(
             requirement=args.requirement,
-            require_preflight_ready=False,
             allow_planner_fallback=True,
             entry_scope="interactive_room_start",
         )

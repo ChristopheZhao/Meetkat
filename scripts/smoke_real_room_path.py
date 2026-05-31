@@ -284,14 +284,6 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print a compact JSON summary on success",
     )
-    parser.add_argument(
-        "--allow-preflight-blocked",
-        action="store_true",
-        help=(
-            "allow the smoke to enter the room even when operator preflight reports "
-            "hard prerequisites; use only when intentionally diagnosing blocked flows"
-        ),
-    )
     return parser
 
 
@@ -349,30 +341,21 @@ def _validate_final_snapshot(
         )
 
 
-def _validate_preflight(
-    preflight_report: dict[str, Any],
-    *,
-    allow_preflight_blocked: bool,
-) -> None:
+def _validate_preflight(preflight_report: dict[str, Any]) -> None:
     room_start_contract = preflight_report.get("room_start_contract")
     if not isinstance(room_start_contract, dict):
         raise RuntimeError("real-path smoke expected a room_start_contract payload before room start")
 
-    if bool(room_start_contract.get("room_start_ready", False)):
-        return
-    if allow_preflight_blocked:
-        return
-
-    missing_operator_inputs = room_start_contract.get("missing_operator_inputs")
+    system_blockers = room_start_contract.get("system_blockers")
     normalized = (
-        [str(item).strip() for item in missing_operator_inputs if str(item).strip()]
-        if isinstance(missing_operator_inputs, list)
+        [str(item).strip() for item in system_blockers if str(item).strip()]
+        if isinstance(system_blockers, list)
         else []
     )
-    requirement_text = "; ".join(normalized[:3]) if normalized else "unknown missing operator inputs"
-    raise RuntimeError(
-        "real-path smoke blocked by room-start contract gaps: " + requirement_text
-    )
+    if normalized:
+        raise RuntimeError(
+            "real-path smoke blocked by infra blockers: " + "; ".join(normalized[:3])
+        )
 
 
 async def run_real_path_smoke(
@@ -381,7 +364,6 @@ async def run_real_path_smoke(
     requirement: str,
     timeout_sec: float,
     poll_interval_sec: float,
-    allow_preflight_blocked: bool = False,
 ) -> dict[str, Any]:
     readiness = runtime.runtime_readiness()
     _ensure_readiness(readiness)
@@ -391,15 +373,11 @@ async def run_real_path_smoke(
         entry_scope=DEFAULT_ENTRY_SCOPE,
         operator_context=DEFAULT_OPERATOR_CONTEXT,
     )
-    _validate_preflight(
-        preflight_report,
-        allow_preflight_blocked=allow_preflight_blocked,
-    )
+    _validate_preflight(preflight_report)
 
     initial_snapshot = await runtime.create_room(
         requirement=requirement,
         allow_planner_fallback=False,
-        require_preflight_ready=not allow_preflight_blocked,
         entry_scope=DEFAULT_ENTRY_SCOPE,
         operator_context=DEFAULT_OPERATOR_CONTEXT,
     )
@@ -460,7 +438,6 @@ async def execute_real_path_smoke(args: argparse.Namespace) -> dict[str, Any]:
             requirement=args.requirement,
             timeout_sec=args.timeout_sec,
             poll_interval_sec=args.poll_interval_sec,
-            allow_preflight_blocked=getattr(args, "allow_preflight_blocked", False),
         )
     finally:
         await runtime.close()

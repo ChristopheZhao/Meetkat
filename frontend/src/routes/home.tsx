@@ -10,7 +10,6 @@ import {
 } from "@tanstack/react-query";
 
 import {
-  ApiError,
   createRoom,
   listRooms,
   preflightRoom,
@@ -33,21 +32,6 @@ function formatToken(value: string): string {
     .filter(Boolean)
     .map((part) => part[0]?.toUpperCase() + part.slice(1))
     .join(" ");
-}
-
-function extractPreflightReport(error: unknown): RoomPreflightReport | null {
-  if (!(error instanceof ApiError)) {
-    return null;
-  }
-  const detail = error.detail;
-  if (!detail || typeof detail !== "object" || !("preflight" in detail)) {
-    return null;
-  }
-  const payload = detail.preflight;
-  if (!payload || typeof payload !== "object" || !("room_start_contract" in payload)) {
-    return null;
-  }
-  return payload as unknown as RoomPreflightReport;
 }
 
 function plannerStatus(readiness: RuntimeReadiness): string {
@@ -155,15 +139,11 @@ export function HomePage() {
       await createMutation.mutateAsync({
         requirement,
         mode: "agent_first",
-        require_preflight_ready: false,
         allow_planner_fallback: true,
         entry_scope: HOME_ENTRY_SCOPE,
       });
-    } catch (error) {
-      const report = extractPreflightReport(error);
-      if (report) {
-        setPreflightReport(report);
-      }
+    } catch {
+      // Errors are surfaced through the mutation state below.
     }
   };
 

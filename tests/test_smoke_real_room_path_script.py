@@ -51,8 +51,8 @@ def _event(event_type: str) -> dict:
 def _preflight_report(
     *,
     room_start_ready: bool = True,
-    missing_operator_inputs: list[str] | None = None,
     contextual_open_questions: list[str] | None = None,
+    system_blockers: list[str] | None = None,
 ) -> dict:
     return {
         "requirement": "Validate the real room path.",
@@ -66,12 +66,11 @@ def _preflight_report(
         "candidate_specialist_roster": [],
         "room_start_contract": {
             "room_start_ready": room_start_ready,
-            "runtime_bootstrap_ready": True,
-            "missing_operator_inputs": list(missing_operator_inputs or []),
+            "runtime_bootstrap_ready": room_start_ready,
             "contextual_open_questions": list(contextual_open_questions or []),
-            "system_blockers": [],
+            "system_blockers": list(system_blockers or []),
             "known_context": [],
-            "recommended_surface": "room_start" if room_start_ready else "operator_input_required",
+            "recommended_surface": "room_start" if room_start_ready else "runtime_readiness",
             "root_cause_hypothesis": "",
         },
         "runtime_readiness": {
@@ -211,7 +210,6 @@ class FakeRuntime:
         requirement: str,
         mode: str = "agent_first",
         allow_planner_fallback: bool = False,
-        require_preflight_ready: bool = False,
         entry_scope: str | None = None,
         operator_context: dict | None = None,
     ) -> dict:
@@ -223,7 +221,6 @@ class FakeRuntime:
                 "requirement": requirement,
                 "mode": mode,
                 "allow_planner_fallback": allow_planner_fallback,
-                "require_preflight_ready": require_preflight_ready,
                 "entry_scope": entry_scope or "",
                 "operator_context": resolved_operator_context,
             }
@@ -340,7 +337,6 @@ class SmokeRealRoomPathScriptTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["conclusion_type"], "follow_up_required")
         self.assertEqual(result["status"], "ended")
         self.assertEqual(runtime.created[0]["allow_planner_fallback"], False)
-        self.assertEqual(runtime.created[0]["require_preflight_ready"], True)
         self.assertEqual(runtime.created[0]["entry_scope"], MODULE.DEFAULT_ENTRY_SCOPE)
         self.assertEqual(runtime.created[0]["operator_context"]["brief_source"], "agent")
         self.assertTrue(runtime.created[0]["operator_context"]["validation_scenario"])
@@ -578,7 +574,7 @@ class SmokeRealRoomPathScriptTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("preflight gate", analysis["root_cause_hypothesis"])
 
-    async def test_run_real_path_smoke_blocks_before_room_start_when_preflight_not_ready(self) -> None:
+    async def test_run_real_path_smoke_blocks_before_room_start_only_on_infra_blockers(self) -> None:
         runtime = FakeRuntime(
             readiness={
                 "primary_planner_ready": True,
@@ -588,7 +584,7 @@ class SmokeRealRoomPathScriptTests(unittest.IsolatedAsyncioTestCase):
             },
             preflight_report=_preflight_report(
                 room_start_ready=False,
-                missing_operator_inputs=["Which specific provider is required for this validation?"],
+                system_blockers=["primary planner is not ready for room creation"],
             ),
             initial_snapshot=_snapshot(
                 room_id="room_never_created",
@@ -599,7 +595,7 @@ class SmokeRealRoomPathScriptTests(unittest.IsolatedAsyncioTestCase):
             replay_events=[],
         )
 
-        with self.assertRaisesRegex(RuntimeError, "blocked by room-start contract gaps"):
+        with self.assertRaisesRegex(RuntimeError, "infra blockers"):
             await MODULE.run_real_path_smoke(
                 runtime,
                 requirement="Validate the real room path.",
@@ -609,69 +605,6 @@ class SmokeRealRoomPathScriptTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(runtime.preflight_calls), 1)
         self.assertEqual(runtime.created, [])
-
-    async def test_run_real_path_smoke_can_override_preflight_gate_for_blocked_diagnostics(self) -> None:
-        room_id = "room_override_blocked"
-        runtime = FakeRuntime(
-            readiness={
-                "primary_planner_ready": True,
-                "executor_ready": True,
-                "primary_unavailable_reason": "",
-                "executor_reason": "",
-            },
-            preflight_report=_preflight_report(
-                room_start_ready=False,
-                missing_operator_inputs=["Which specific provider is required for this validation?"],
-            ),
-            initial_snapshot=_snapshot(
-                room_id=room_id,
-                status="running",
-                brief_source="agent",
-            ),
-            snapshots=[
-                _snapshot(
-                    room_id=room_id,
-                    status="ended",
-                    brief_source="agent",
-                    current_turns=[{"role": "operations_specialist", "task": "diagnose"}],
-                    transcript=[{"message_id": "m4", "seq": 10}],
-                    conclusion_type="blocked",
-                    conclusion_reason="Need specific provider confirmation.",
-                )
-            ],
-            replay_events=[
-                _event("planning.completed"),
-                _event("room.started"),
-                _summary_event(
-                    round_index=1,
-                    conclusion_type="blocked",
-                    conclusion_reason="Need specific provider confirmation.",
-                ),
-                _meeting_ended_event(
-                    conclusion_type="blocked",
-                    conclusion_reason="Need specific provider confirmation.",
-                    control_reason="control gate accepted orchestration end signal",
-                    orchestration_end_reason="Need specific provider confirmation.",
-                ),
-            ],
-        )
-
-        result = await MODULE.run_real_path_smoke(
-            runtime,
-            requirement="Diagnose blocked external dependencies.",
-            timeout_sec=1.0,
-            poll_interval_sec=0.0,
-            allow_preflight_blocked=True,
-        )
-
-        self.assertEqual(result["room_start_contract"]["room_start_ready"], False)
-        self.assertEqual(runtime.created[0]["require_preflight_ready"], False)
-        self.assertEqual(runtime.created[0]["entry_scope"], MODULE.DEFAULT_ENTRY_SCOPE)
-        self.assertEqual(runtime.created[0]["operator_context"]["brief_source"], "agent")
-        self.assertTrue(runtime.created[0]["operator_context"]["validation_scenario"])
-        self.assertTrue(runtime.created[0]["operator_context"]["binding_readiness_contract"])
-        self.assertTrue(runtime.created[0]["operator_context"]["transport_contract"])
-        self.assertTrue(runtime.created[0]["operator_context"]["projection_contract"])
 
 
 if __name__ == "__main__":

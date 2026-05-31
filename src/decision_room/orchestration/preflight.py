@@ -214,7 +214,6 @@ class ExternalDependencyPreflight:
 class RoomStartContract:
     room_start_ready: bool
     runtime_bootstrap_ready: bool
-    missing_operator_inputs: list[str] = field(default_factory=list)
     contextual_open_questions: list[str] = field(default_factory=list)
     system_blockers: list[str] = field(default_factory=list)
     known_context: list[str] = field(default_factory=list)
@@ -227,7 +226,6 @@ class RoomStartContract:
 
 def build_room_start_contract(
     *,
-    operator_required_inputs: list[str],
     contextual_open_questions: list[str],
     runtime_readiness: Mapping[str, Any] | None = None,
     operator_context: Mapping[str, Any] | None = None,
@@ -243,15 +241,6 @@ def build_room_start_contract(
         runtime_payload,
         allow_planner_fallback=allow_planner_fallback,
     )
-    missing_inputs = [
-        item
-        for item in _normalized_items(operator_required_inputs)
-        if not question_answered_by_context(
-            item,
-            runtime_context=runtime_payload,
-            operator_context=operator_payload,
-        )
-    ]
     remaining_contextual_questions = [
         item
         for item in _normalized_items(contextual_open_questions)
@@ -261,29 +250,22 @@ def build_room_start_contract(
             operator_context=operator_payload,
         )
     ]
-    room_start_ready = runtime_bootstrap_ready and not missing_inputs
+    room_start_ready = runtime_bootstrap_ready and not system_blockers
     if system_blockers:
         root_cause_hypothesis = (
             "runtime bootstrap is not ready; fix planner/executor readiness before treating "
             "the room-start contract as clear"
         )
         recommended_surface = "runtime_readiness"
-    elif missing_inputs:
-        root_cause_hypothesis = (
-            "operator-supplied inputs are still missing before room start; keep them outside "
-            "the room instead of rediscovering them mid-meeting"
-        )
-        recommended_surface = "operator_input_required"
     else:
         root_cause_hypothesis = (
-            "room-start contract is clear; remaining questions are contextual and can stay "
-            "inside the meeting path"
+            "room-start contract is clear; remaining questions are contextual and the in-meeting "
+            "supervisor/specialists resolve them via the human-message channel"
         )
         recommended_surface = "room_start"
     return RoomStartContract(
         room_start_ready=room_start_ready,
         runtime_bootstrap_ready=runtime_bootstrap_ready,
-        missing_operator_inputs=missing_inputs,
         contextual_open_questions=remaining_contextual_questions,
         system_blockers=system_blockers,
         known_context=_known_context_lines(runtime_payload, operator_payload),
@@ -398,6 +380,9 @@ def question_answered_by_context(
     runtime_context: Mapping[str, Any] | None = None,
     operator_context: Mapping[str, Any] | None = None,
 ) -> bool:
+    # Legitimate callers: build_room_start_contract / assess_external_dependency_preflight
+    # (infra preflight) and room_executor's in-meeting question filtering. Not a
+    # clarification gate — clarifications happen inside the meeting.
     normalized_question = str(question).strip()
     if not normalized_question:
         return False
