@@ -215,6 +215,7 @@ class RoundOrchestrator:
             round_index=round_index,
             open_questions=open_questions,
             synthesis_output=synthesis_output,
+            turn_results=turn_results,
         )
         consensus = self._consensus.evaluate(
             DecisionContext(

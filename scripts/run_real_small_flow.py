@@ -39,7 +39,7 @@ from decision_room.mas.types import (
 from decision_room.policies.fallback import DisasterOnlyFallbackPolicy
 from decision_room.providers import GenerateRequest, ProviderConfig, ProviderRegistry
 from decision_room.routing.model_router import HybridModelRouter, RouterTargets
-from decision_room.runtime.real_run_contract import (
+from decision_room.orchestration.real_run_contract import (
     build_host_prompts,
     build_meeting_brief,
     parse_host_agenda,

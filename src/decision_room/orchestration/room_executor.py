@@ -422,8 +422,25 @@ def signals_after_round(
     round_index: int,
     open_questions: list[str],
     synthesis_output: "SynthesisOutput",
+    turn_results: list[Any] | None = None,
 ) -> DecisionSignals:
-    """Updates the per-round signals based on the synthesis output."""
+    """Updates the per-round signals based on the synthesis output and,
+    when available, on measurements from the round's specialist outputs.
+
+    Phase 5 swaps the heuristic cookings for real measurements when
+    ``turn_results`` is supplied:
+
+    - ``support`` becomes the mean specialist confidence across the round.
+    - ``disagreement_index`` becomes a normalized count of distinct claim
+      clusters (token-Jaccard >= 0.5 groups claims into one cluster).
+    - ``margin_top1_top2`` becomes the confidence-mean gap between the
+      top two clusters.
+
+    The heuristic fallback (pre-Phase-5 behavior) is preserved when
+    ``turn_results`` is None or empty so callers that don't thread the
+    measurements through — and round 1 with no transcript yet — keep
+    working.
+    """
     signals = signals_for_round(snapshot, round_index)
     open_question_penalty = min(0.12, len(open_questions) * 0.03)
     disagreement_adjustment = min(0.16, len(synthesis_output.disagreement) * 0.04)
@@ -436,18 +453,185 @@ def signals_after_round(
     )
     rounds_without_progress = 1 if candidate_stable and round_index > 1 else 0
 
+    measurements = _measure_signals_from_turns(turn_results or [])
+    if measurements is None:
+        support_base = signals.support + agreement_boost + action_item_boost
+        confidence_base = signals.confidence - open_question_penalty + 0.02
+        margin_base = signals.margin_top1_top2 + agreement_boost / 2
+        disagreement_base = (
+            signals.disagreement_index + disagreement_adjustment - agreement_boost
+        )
+    else:
+        # Measured signals replace the heuristic seed but keep the
+        # synthesis-derived boosts so agreement/disagreement framing
+        # still moves the score in the expected direction.
+        support_base = measurements["mean_confidence"] + agreement_boost + action_item_boost
+        # Confidence aggregates the per-specialist confidences; we still
+        # let open-question penalties pull it down so unresolved items
+        # depress the score.
+        confidence_base = measurements["mean_confidence"] - open_question_penalty + 0.02
+        margin_base = measurements["margin_top1_top2"] + agreement_boost / 2
+        disagreement_base = (
+            measurements["disagreement_index"]
+            + disagreement_adjustment
+            - agreement_boost
+        )
+
     return DecisionSignals(
-        support=min(0.97, signals.support + agreement_boost + action_item_boost),
-        confidence=max(0.30, min(0.97, signals.confidence - open_question_penalty + 0.02)),
+        support=min(0.97, support_base),
+        confidence=max(0.30, min(0.97, confidence_base)),
         risk_penalty=min(0.35, signals.risk_penalty + open_question_penalty / 2),
-        margin_top1_top2=min(0.24, signals.margin_top1_top2 + agreement_boost / 2),
-        disagreement_index=max(
-            0.15,
-            min(0.95, signals.disagreement_index + disagreement_adjustment - agreement_boost),
-        ),
+        margin_top1_top2=min(0.24, margin_base),
+        disagreement_index=max(0.15, min(0.95, disagreement_base)),
         rounds_without_progress=rounds_without_progress,
         tool_failure_rate=signals.tool_failure_rate,
     )
+
+
+def _measure_signals_from_turns(turn_results: list[Any]) -> dict[str, float] | None:
+    """Derive measured signals from a round's specialist turn outputs.
+
+    Returns ``None`` when ``turn_results`` is empty (round 1 setup, tests
+    that don't thread measurements). Otherwise returns a dict with:
+
+    - ``mean_confidence`` — arithmetic mean over per-specialist confidence.
+    - ``disagreement_index`` — 1 - (1 / cluster_count), clamped to [0.15, 0.95].
+      One cluster means full agreement (0.0); more clusters means more
+      disagreement, asymptoting at 1.0.
+    - ``margin_top1_top2`` — confidence-mean gap between the top two
+      clusters. Single-cluster rounds return 0.0 (no margin between
+      same-side claims).
+
+    Token-Jaccard >= 0.5 groups two claim strings into one cluster.
+    Empty claim strings are skipped.
+    """
+    if not turn_results:
+        return None
+    confidences: list[float] = []
+    claim_token_sets: list[set[str]] = []
+    confidence_by_claim_idx: list[float] = []
+    for turn in turn_results:
+        output = getattr(turn, "output", None)
+        if output is None:
+            continue
+        claim = str(getattr(output, "claim", "") or "").strip()
+        try:
+            confidence = float(getattr(output, "confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        confidences.append(confidence)
+        if claim:
+            claim_token_sets.append(_claim_tokens(claim))
+            confidence_by_claim_idx.append(confidence)
+    if not confidences:
+        return None
+    mean_confidence = sum(confidences) / len(confidences)
+
+    clusters = _cluster_claims_by_jaccard(claim_token_sets)
+    if not clusters:
+        return {
+            "mean_confidence": mean_confidence,
+            "disagreement_index": 0.58,
+            "margin_top1_top2": 0.05,
+        }
+
+    cluster_count = len(clusters)
+    if cluster_count == 1:
+        disagreement_index = 0.15
+    else:
+        disagreement_index = 1.0 - (1.0 / cluster_count)
+
+    cluster_mean_confidences = sorted(
+        (
+            sum(confidence_by_claim_idx[idx] for idx in cluster) / len(cluster)
+            for cluster in clusters
+        ),
+        reverse=True,
+    )
+    if len(cluster_mean_confidences) >= 2:
+        margin = max(
+            0.0, cluster_mean_confidences[0] - cluster_mean_confidences[1]
+        )
+    else:
+        margin = 0.0
+    return {
+        "mean_confidence": mean_confidence,
+        "disagreement_index": disagreement_index,
+        "margin_top1_top2": margin,
+    }
+
+
+_CLAIM_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _claim_tokens(claim: str) -> set[str]:
+    """Tokenize a claim string for the Jaccard clustering pass.
+
+    Lowercased alphanumeric runs only — strips punctuation, whitespace,
+    and stopwords so semantically identical claims with different
+    surface forms still cluster. A few high-frequency English stopwords
+    are removed; the rest of the token vocabulary stays raw.
+    """
+    tokens = {match.lower() for match in _CLAIM_TOKEN_RE.findall(claim)}
+    return tokens - _CLAIM_STOPWORDS
+
+
+_CLAIM_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "should",
+    "that",
+    "the",
+    "to",
+    "with",
+}
+
+
+def _cluster_claims_by_jaccard(
+    claim_token_sets: list[set[str]],
+    *,
+    threshold: float = 0.5,
+) -> list[list[int]]:
+    """Group claim token-sets by Jaccard >= threshold.
+
+    Returns clusters as lists of indices into ``claim_token_sets``. The
+    algorithm is greedy single-pass linkage: each claim joins the first
+    existing cluster it crosses the threshold against; otherwise it
+    starts a new cluster. Good enough for 2-5 specialists per round.
+    """
+    clusters: list[list[int]] = []
+    for idx, tokens in enumerate(claim_token_sets):
+        if not tokens:
+            continue
+        joined = False
+        for cluster in clusters:
+            representative = claim_token_sets[cluster[0]]
+            if not representative:
+                continue
+            intersection = len(tokens & representative)
+            union = len(tokens | representative)
+            if union == 0:
+                continue
+            if intersection / union >= threshold:
+                cluster.append(idx)
+                joined = True
+                break
+        if not joined:
+            clusters.append([idx])
+    return clusters
 
 
 def resolve_round_end_signal(
