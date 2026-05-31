@@ -31,3 +31,22 @@ runs from the same snapshot produce identical markdown (modulo the
 generation timestamp). The journal can be replayed through
 `RoomProjector` to rebuild both the snapshot and the memory store from
 scratch.
+
+## Index (`INDEX.md`)
+
+`INDEX.md` in this directory is a cross-reference table over every
+decision record here — main table sorted by date descending, plus a
+secondary grouping by `conclusion_type`. It is generated, not authored:
+
+```bash
+python scripts/generate_decisions_index.py            # write INDEX.md
+python scripts/generate_decisions_index.py --check    # CI-friendly: exit 1 if stale
+```
+
+The generator parses each record's metadata block (H1, `会议 ID`,
+`状态`, `决策类型`, `生成时间`, `原始需求`, `会议目标`, `## 行动项`).
+No frontmatter is required — the existing format that
+`render_decision_record` emits is the parse contract. Renderer is in
+`decision_room.runtime.decision_index.render_index` and, like the
+decision-record renderer, is a pure function — same inputs produce
+byte-identical output.
