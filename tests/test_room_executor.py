@@ -496,7 +496,6 @@ class LLMRoomExecutorTests(unittest.IsolatedAsyncioTestCase):
                 "room_start_contract": {
                     "room_start_ready": True,
                     "runtime_bootstrap_ready": True,
-                    "missing_operator_inputs": [],
                     "contextual_open_questions": [],
                     "system_blockers": [],
                     "known_context": [

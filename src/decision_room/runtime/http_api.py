@@ -22,7 +22,7 @@ from decision_room.orchestration import (
     UnavailableRoomExecutor,
 )
 from decision_room.policies.fallback import FallbackConfig
-from .room_runtime import RoomPreflightError, RoomRuntime, RoomStateError, RuntimeConfig
+from .room_runtime import RoomRuntime, RoomStateError, RuntimeConfig
 
 # Phase 5: ``AsyncDemoExecutor`` and the ``DemoAgentExecutor`` adapter
 # were removed from the product HTTP boundary. Tests and governance
@@ -329,7 +329,6 @@ class CreateRoomRequest(BaseModel):
     requirement: str = Field(min_length=8)
     mode: str = "agent_first"
     allow_planner_fallback: bool = False
-    require_preflight_ready: bool = False
     entry_scope: str = ""
     operator_context: dict[str, Any] = Field(default_factory=dict)
 
@@ -384,7 +383,6 @@ async def create_room(payload: CreateRoomRequest) -> dict:
             requirement=payload.requirement,
             mode=payload.mode,
             allow_planner_fallback=payload.allow_planner_fallback,
-            require_preflight_ready=payload.require_preflight_ready,
             entry_scope=payload.entry_scope or None,
             operator_context=payload.operator_context,
         )
@@ -395,15 +393,6 @@ async def create_room(payload: CreateRoomRequest) -> dict:
                 "error": exc.error_code,
                 "message": str(exc),
                 "can_fallback": exc.can_fallback,
-            },
-        ) from exc
-    except RoomPreflightError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "room_preflight_blocked",
-                "message": str(exc),
-                "preflight": exc.preflight_payload,
             },
         ) from exc
 

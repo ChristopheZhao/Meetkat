@@ -63,7 +63,6 @@ export type PlannedSpecialist = {
 export type RoomStartContract = {
   room_start_ready: boolean;
   runtime_bootstrap_ready: boolean;
-  missing_operator_inputs: string[];
   contextual_open_questions: string[];
   system_blockers: string[];
   known_context: string[];
@@ -173,7 +172,6 @@ export type CreateRoomInput = {
   requirement: string;
   mode: string;
   allow_planner_fallback?: boolean;
-  require_preflight_ready?: boolean;
   entry_scope?: string;
   operator_context?: Record<string, unknown>;
 };

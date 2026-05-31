@@ -164,7 +164,6 @@ async def run(requirement: str, max_rounds: int) -> int:
         print(f"\n=== Creating room ===\nrequirement = {requirement}\n")
         snapshot = await runtime.create_room(
             requirement=requirement,
-            require_preflight_ready=False,
             entry_scope="interactive_room_start",
             allow_planner_fallback=True,
         )

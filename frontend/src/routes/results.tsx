@@ -13,7 +13,6 @@ import {
   readOperatorContextValue,
   readPlannedSpecialists,
   readPreflightBoolean,
-  readPreflightList,
   readPreflightValue,
   readRuntimeExecutorTargets,
   readRuntimePlannerTarget,
@@ -42,7 +41,6 @@ export function ResultsPage() {
   const plannerTarget = readRuntimePlannerTarget(snapshot);
   const executorTargets = readRuntimeExecutorTargets(snapshot);
   const contractSections = readProductOperatorContractSections(snapshot);
-  const missingOperatorInputs = readPreflightList(snapshot, "missing_operator_inputs");
 
   const handleDownloadMarkdown = () => {
     const markdown = buildDecisionRecordMarkdown(snapshot, roleDirectory);
@@ -159,16 +157,6 @@ export function ResultsPage() {
               ))}
             </div>
           )}
-          {missingOperatorInputs.length > 0 ? (
-            <div className={styles.contractSection}>
-              <p className={styles.sectionLabel}>规划器提到的开放问题</p>
-              <ul className={styles.list}>
-                {missingOperatorInputs.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
         </article>
       </section>
 
