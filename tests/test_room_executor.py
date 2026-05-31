@@ -1,5 +1,8 @@
+import tempfile
 import unittest
+from pathlib import Path
 
+from decision_room.memory import LongTermLessonStore, RoomMemoryStore
 from decision_room.orchestration.room_executor import LLMRoomExecutor, _parse_synthesis_output
 from decision_room.policies.fallback import DisasterOnlyFallbackPolicy
 from decision_room.policies.routing_control import RoutingControlPolicy
@@ -162,6 +165,17 @@ class ContextAwareProvider(FakeProvider):
 
 
 class LLMRoomExecutorTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        # Phase 3 wires every agent through memory recall. Without explicit
+        # per-test stores, the default ``RoomMemoryStore`` singleton would
+        # leak state between tests that re-use ``room_id="room_test"`` and
+        # the FakeProvider's keyword-driven branch ("if 'product_specialist'
+        # in req.user_prompt") would fire on stale recall content.
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self._room_memory = RoomMemoryStore(storage_dir=Path(self._tmp.name))
+        self._long_term = LongTermLessonStore(storage_dir=Path(self._tmp.name))
+
     async def test_build_round_returns_real_role_messages(self) -> None:
         registry = ProviderRegistry({"qwen": FakeProvider()})
         router = HybridModelRouter(
@@ -176,6 +190,8 @@ class LLMRoomExecutorTests(unittest.IsolatedAsyncioTestCase):
             registry=registry,
             router=router,
             use_background_threads=False,
+            room_memory_store=self._room_memory,
+            long_term_store=self._long_term,
         )
         snapshot = RoomSnapshot(
             room_id="room_test",
@@ -264,6 +280,8 @@ class LLMRoomExecutorTests(unittest.IsolatedAsyncioTestCase):
             router=router,
             use_background_threads=False,
             transient_max_attempts=2,
+            room_memory_store=self._room_memory,
+            long_term_store=self._long_term,
         )
         snapshot = RoomSnapshot(
             room_id="room_test",
@@ -318,6 +336,8 @@ class LLMRoomExecutorTests(unittest.IsolatedAsyncioTestCase):
             router=router,
             use_background_threads=False,
             transient_max_attempts=2,
+            room_memory_store=self._room_memory,
+            long_term_store=self._long_term,
         )
         snapshot = RoomSnapshot(
             room_id="room_test",
@@ -376,6 +396,8 @@ class LLMRoomExecutorTests(unittest.IsolatedAsyncioTestCase):
             registry=registry,
             router=router,
             use_background_threads=False,
+            room_memory_store=self._room_memory,
+            long_term_store=self._long_term,
         )
         snapshot = RoomSnapshot(
             room_id="room_test",
@@ -443,6 +465,8 @@ class LLMRoomExecutorTests(unittest.IsolatedAsyncioTestCase):
             registry=registry,
             router=router,
             use_background_threads=False,
+            room_memory_store=self._room_memory,
+            long_term_store=self._long_term,
         )
         snapshot = RoomSnapshot(
             room_id="room_test",

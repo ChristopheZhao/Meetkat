@@ -32,6 +32,7 @@ from decision_room.providers import (
     ProviderTimeoutError,
 )
 from decision_room.routing.model_router import HybridModelRouter, RouterTargets
+from decision_room.tools import ToolRegistry, default_tool_registry
 
 from .pre_room_planning import (
     CandidateSpecialist,
@@ -155,6 +156,9 @@ class LLMRoomExecutor:
         consensus: HybridConsensusStrategy | None = None,
         use_background_threads: bool = True,
         transient_max_attempts: int = 2,
+        tool_registry: ToolRegistry | None = None,
+        room_memory_store: Any = None,
+        long_term_store: Any = None,
     ) -> None:
         self._registry = registry
         self._router = router
@@ -163,6 +167,32 @@ class LLMRoomExecutor:
         self._consensus = consensus or HybridConsensusStrategy()
         self._use_background_threads = use_background_threads
         self._transient_max_attempts = max(1, transient_max_attempts)
+        # Phase 2: every role runs as a real Agent. The orchestrator owns
+        # the lifecycle but no longer the prompt/parse/retry details.
+        # Phase 3: agents share memory stores so host/specialist/synthesis
+        # recall blocks see the same state.
+        # Importing lazily avoids a module-load cycle through agents/.
+        from decision_room.agents import (
+            HostAgent,
+            SpecialistAgent,
+            SynthesisAgent,
+        )
+
+        agent_kwargs = dict(
+            registry=registry,
+            router=router,
+            use_background_threads=use_background_threads,
+            transient_max_attempts=self._transient_max_attempts,
+            room_memory_store=room_memory_store,
+            long_term_store=long_term_store,
+        )
+        self._tool_registry = tool_registry or default_tool_registry()
+        self._host_agent = HostAgent(**agent_kwargs)
+        self._specialist_agent = SpecialistAgent(
+            tool_registry=self._tool_registry,
+            **agent_kwargs,
+        )
+        self._synthesis_agent = SynthesisAgent(**agent_kwargs)
 
     @classmethod
     def from_env(cls) -> RoomExecutor:
@@ -200,9 +230,17 @@ class LLMRoomExecutor:
             ),
         )
 
-    async def build_round(self, snapshot: Any, round_index: int) -> RoomRound:
-        phase = self._phase_for_round(snapshot, round_index)
-        routing_signals = self._signals_for_round(snapshot, round_index)
+    async def build_round(
+        self,
+        snapshot: Any,
+        round_index: int,
+        *,
+        publish: Any = None,
+    ) -> RoomRound:
+        from decision_room.agents import TurnContext
+
+        phase = phase_for_round(snapshot, round_index)
+        routing_signals = signals_for_round(snapshot, round_index)
         topic = snapshot.topic or "multi-agent meeting room"
         ctx = DecisionContext(
             room_id=snapshot.room_id,
@@ -212,31 +250,24 @@ class LLMRoomExecutor:
         )
 
         plan = self._planner.plan(ctx)
-        next_focus = self._resolve_focus(snapshot, plan.next_focus)
+        next_focus = resolve_focus(snapshot, plan.next_focus)
         route_ctx = ctx
         route = self._router.route(route_ctx)
-        brief = _build_runtime_meeting_brief(snapshot, next_focus)
-        allowed_constraint_ids = {item["id"] for item in brief["constraints"]}
-        allowed_specialist_roles = {
-            item["role"] for item in brief.get("candidate_specialists", []) if item.get("role")
-        }
-        host_system_prompt, host_user_prompt = build_host_prompts(brief)
-        host_execution = await self._generate_text(
+
+        host_ctx = TurnContext(
+            snapshot=snapshot,
+            round_index=round_index,
+            phase=phase,
+            next_focus=next_focus,
             route_ctx=route_ctx,
             route=route,
-            system_prompt=host_system_prompt,
-            user_prompt=host_user_prompt,
-            role="host",
+            publish=publish,
         )
-        route_ctx = host_execution.ctx
-        host_route = host_execution.route
-        route = host_route
-        host_agenda = parse_host_agenda(
-            host_execution.text,
-            allowed_constraint_ids,
-            allowed_specialist_roles,
-        )
-        host_agenda = _filter_host_agenda_open_questions(snapshot, host_agenda)
+        host_result = await self._host_agent.run(host_ctx)
+        route_ctx = host_result.ctx
+        route = host_result.route
+        host_agenda = host_result.agenda
+
         specialist_turns = [
             (specialist, turn.task)
             for specialist, turn in zip(
@@ -267,39 +298,49 @@ class LLMRoomExecutor:
         turn_results: list[SpecialistTurnResult] = []
         target_claim_ref = ""
         for specialist, turn_task in specialist_turns:
-            output, route_ctx, turn_route = await self._generate_argument(
+            specialist_ctx = TurnContext(
+                snapshot=snapshot,
+                round_index=round_index,
+                phase=phase,
+                next_focus=next_focus,
                 route_ctx=route_ctx,
                 route=route,
-                specialist=specialist,
-                turn_task=turn_task,
-                snapshot=snapshot,
-                phase=phase,
-                round_index=round_index,
-                next_focus=next_focus,
-                host_agenda=host_agenda,
-                target_claim_ref=target_claim_ref,
+                publish=publish,
+                extras={
+                    "specialist": specialist,
+                    "turn_task": turn_task,
+                    "host_agenda": host_agenda,
+                    "target_claim_ref": target_claim_ref,
+                },
             )
-            route = turn_route
+            specialist_result = await self._specialist_agent.run(specialist_ctx)
+            route_ctx = specialist_result.ctx
+            route = specialist_result.route
+            output = specialist_result.output
             turn_results.append(
                 SpecialistTurnResult(
                     specialist=specialist,
                     task=turn_task,
                     output=output,
-                    route=turn_route,
+                    route=route,
                 )
             )
             target_claim_ref = output.claim
 
-        synthesis_output, route_ctx, synthesis_route = await self._generate_synthesis(
+        synthesis_ctx = TurnContext(
+            snapshot=snapshot,
+            round_index=round_index,
+            phase=phase,
+            next_focus=next_focus,
             route_ctx=route_ctx,
             route=route,
-            snapshot=snapshot,
-            phase=phase,
-            round_index=round_index,
-            next_focus=next_focus,
-            host_agenda=host_agenda,
-            turn_results=turn_results,
+            publish=publish,
+            extras={"host_agenda": host_agenda, "turn_results": turn_results},
         )
+        synthesis_result = await self._synthesis_agent.run(synthesis_ctx)
+        route_ctx = synthesis_result.ctx
+        synthesis_route = synthesis_result.route
+        synthesis_output = synthesis_result.output
 
         open_questions = _dedupe_strings(
             [
@@ -692,90 +733,13 @@ class LLMRoomExecutor:
         )
 
     def _resolve_focus(self, snapshot: Any, default_focus: str) -> str:
-        if snapshot.last_human_message:
-            return (
-                "address the latest human intervention while preserving replay, "
-                "human override, and room-level event visibility"
-            )
-        return snapshot.current_focus or default_focus
+        return resolve_focus(snapshot, default_focus)
 
     def _phase_for_round(self, snapshot: Any, round_index: int) -> MeetingPhase:
-        # LLM-recommended next phase takes precedence whenever the prior
-        # synthesis turn emitted a valid recommendation. This lets the
-        # synthesis agent advance or pull back the meeting pacing instead
-        # of being locked into the rule-based derivation below.
-        recommended = str(getattr(snapshot, "recommended_next_phase", "") or "").strip().lower()
-        if recommended:
-            try:
-                return MeetingPhase(recommended)
-            except ValueError:
-                # Defensive: projector should have filtered invalid values,
-                # but a future schema drift should never break round build.
-                pass
-        if round_index <= 1 and not snapshot.transcript:
-            return MeetingPhase.EXPLORE
-        if snapshot.candidate_decision:
-            if _visible_open_questions(snapshot) or snapshot.consensus.disagreement_index > 0.35:
-                return MeetingPhase.SYNTHESIZE
-            return MeetingPhase.DECIDE
-        if snapshot.last_human_message:
-            return MeetingPhase.DEBATE
-        if len(snapshot.transcript) >= 4 or snapshot.consensus.support >= 0.70:
-            return MeetingPhase.SYNTHESIZE
-        return MeetingPhase.DEBATE
+        return phase_for_round(snapshot, round_index)
 
     def _signals_for_round(self, snapshot: Any, round_index: int) -> DecisionSignals:
-        prior_consensus = getattr(snapshot, "consensus", None)
-        transcript_depth = len(getattr(snapshot, "transcript", []))
-        open_question_count = len(_visible_open_questions(snapshot))
-        support = (
-            prior_consensus.support
-            if prior_consensus is not None and prior_consensus.support > 0
-            else 0.56
-        )
-        confidence = (
-            prior_consensus.confidence
-            if prior_consensus is not None and prior_consensus.confidence > 0
-            else 0.63
-        )
-        disagreement = (
-            prior_consensus.disagreement_index
-            if prior_consensus is not None and transcript_depth > 0
-            else 0.58
-        )
-        margin = (
-            prior_consensus.margin_top1_top2
-            if prior_consensus is not None and prior_consensus.margin_top1_top2 > 0
-            else 0.05
-        )
-
-        support = min(0.94, support + 0.03 + min(0.06, transcript_depth * 0.01))
-        confidence = min(0.94, confidence + 0.02 + min(0.05, transcript_depth * 0.008))
-        disagreement = max(0.18, disagreement - min(0.10, transcript_depth * 0.015))
-        margin = min(0.24, margin + 0.02 + min(0.05, transcript_depth * 0.008))
-
-        if snapshot.candidate_decision:
-            support = min(0.96, support + 0.05)
-            confidence = min(0.96, confidence + 0.04)
-            disagreement = max(0.15, disagreement - 0.05)
-            margin = min(0.28, margin + 0.03)
-        if open_question_count:
-            confidence = max(0.42, confidence - min(0.10, open_question_count * 0.02))
-            disagreement = min(0.90, disagreement + min(0.10, open_question_count * 0.015))
-        if snapshot.last_human_message:
-            support = min(0.96, support + 0.02)
-            confidence = min(0.96, confidence + 0.03)
-            disagreement = max(0.16, disagreement - 0.03)
-
-        return DecisionSignals(
-            support=support,
-            confidence=confidence,
-            risk_penalty=min(0.32, 0.08 + open_question_count * 0.03),
-            margin_top1_top2=margin,
-            disagreement_index=disagreement,
-            rounds_without_progress=1 if snapshot.candidate_decision and round_index > 1 else 0,
-            tool_failure_rate=0.02,
-        )
+        return signals_for_round(snapshot, round_index)
 
     def _signals_after_round(
         self,
@@ -785,29 +749,11 @@ class LLMRoomExecutor:
         open_questions: list[str],
         synthesis_output: SynthesisOutput,
     ) -> DecisionSignals:
-        signals = self._signals_for_round(snapshot, round_index)
-        open_question_penalty = min(0.12, len(open_questions) * 0.03)
-        disagreement_adjustment = min(0.16, len(synthesis_output.disagreement) * 0.04)
-        agreement_boost = min(0.12, len(synthesis_output.agreement) * 0.03)
-        action_item_boost = 0.04 if synthesis_output.action_item_draft else 0.0
-
-        candidate_stable = bool(
-            snapshot.candidate_decision
-            and snapshot.candidate_decision.strip() == synthesis_output.decision_candidate.strip()
-        )
-        rounds_without_progress = 1 if candidate_stable and round_index > 1 else 0
-
-        return DecisionSignals(
-            support=min(0.97, signals.support + agreement_boost + action_item_boost),
-            confidence=max(0.30, min(0.97, signals.confidence - open_question_penalty + 0.02)),
-            risk_penalty=min(0.35, signals.risk_penalty + open_question_penalty / 2),
-            margin_top1_top2=min(0.24, signals.margin_top1_top2 + agreement_boost / 2),
-            disagreement_index=max(
-                0.15,
-                min(0.95, signals.disagreement_index + disagreement_adjustment - agreement_boost),
-            ),
-            rounds_without_progress=rounds_without_progress,
-            tool_failure_rate=signals.tool_failure_rate,
+        return signals_after_round(
+            snapshot=snapshot,
+            round_index=round_index,
+            open_questions=open_questions,
+            synthesis_output=synthesis_output,
         )
 
     def _resolve_round_end_signal(
@@ -818,20 +764,12 @@ class LLMRoomExecutor:
         synthesis_output: SynthesisOutput,
         consensus: Any,
     ) -> tuple[bool, str]:
-        if consensus.should_end:
-            return True, consensus.reason
-        if synthesis_output.should_end_meeting:
-            return True, synthesis_output.conclusion_reason
-        if self._is_stable_follow_up_outcome(
+        return resolve_round_end_signal(
             snapshot=snapshot,
             round_index=round_index,
             synthesis_output=synthesis_output,
-        ):
-            return (
-                True,
-                "orchestration detected a stable follow-up outcome across consecutive rounds",
-            )
-        return False, ""
+            consensus=consensus,
+        )
 
     def _is_stable_follow_up_outcome(
         self,
@@ -840,18 +778,194 @@ class LLMRoomExecutor:
         round_index: int,
         synthesis_output: SynthesisOutput,
     ) -> bool:
-        if round_index < 2:
-            return False
-        if synthesis_output.conclusion_type != "follow_up_required":
-            return False
-        prior_conclusion_type = str(getattr(snapshot, "conclusion_type", "")).strip().lower()
-        if prior_conclusion_type != "follow_up_required":
-            return False
-        prior_candidate = _normalize_text(getattr(snapshot, "candidate_decision", ""))
-        current_candidate = _normalize_text(synthesis_output.decision_candidate)
-        if not prior_candidate or not current_candidate or prior_candidate != current_candidate:
-            return False
-        return bool(synthesis_output.action_item_draft)
+        return _is_stable_follow_up_outcome(
+            snapshot=snapshot,
+            round_index=round_index,
+            synthesis_output=synthesis_output,
+        )
+
+
+def resolve_focus(snapshot: Any, default_focus: str) -> str:
+    """Module-level helper used by both executors to pick the round focus.
+
+    When the operator has just sent a human message, the focus pivots to
+    addressing it; otherwise the snapshot's current_focus wins, with the
+    caller-provided default as the final fallback.
+    """
+    if snapshot.last_human_message:
+        return (
+            "address the latest human intervention while preserving replay, "
+            "human override, and room-level event visibility"
+        )
+    return snapshot.current_focus or default_focus
+
+
+def phase_for_round(snapshot: Any, round_index: int) -> MeetingPhase:
+    """Module-level helper used by both executors. LLM-recommended next
+    phase wins (set by the prior synthesis turn); otherwise fall back to
+    the rule-based derivation that pre-dates Phase 2.
+    """
+    recommended = str(getattr(snapshot, "recommended_next_phase", "") or "").strip().lower()
+    if recommended:
+        try:
+            return MeetingPhase(recommended)
+        except ValueError:
+            # Defensive: projector should have filtered invalid values,
+            # but a future schema drift should never break round build.
+            pass
+    if round_index <= 1 and not snapshot.transcript:
+        return MeetingPhase.EXPLORE
+    if snapshot.candidate_decision:
+        if _visible_open_questions(snapshot) or snapshot.consensus.disagreement_index > 0.35:
+            return MeetingPhase.SYNTHESIZE
+        return MeetingPhase.DECIDE
+    if snapshot.last_human_message:
+        return MeetingPhase.DEBATE
+    if len(snapshot.transcript) >= 4 or snapshot.consensus.support >= 0.70:
+        return MeetingPhase.SYNTHESIZE
+    return MeetingPhase.DEBATE
+
+
+def signals_for_round(snapshot: Any, round_index: int) -> DecisionSignals:
+    """Phase-5 work will replace these heuristic cookings with measurements
+    from agent outputs (confidence aggregation + claim clustering). For
+    Phase 2 the body is moved verbatim from the LLMRoomExecutor method so
+    central_executor stops reaching across the private boundary.
+    """
+    prior_consensus = getattr(snapshot, "consensus", None)
+    transcript_depth = len(getattr(snapshot, "transcript", []))
+    open_question_count = len(_visible_open_questions(snapshot))
+    support = (
+        prior_consensus.support
+        if prior_consensus is not None and prior_consensus.support > 0
+        else 0.56
+    )
+    confidence = (
+        prior_consensus.confidence
+        if prior_consensus is not None and prior_consensus.confidence > 0
+        else 0.63
+    )
+    disagreement = (
+        prior_consensus.disagreement_index
+        if prior_consensus is not None and transcript_depth > 0
+        else 0.58
+    )
+    margin = (
+        prior_consensus.margin_top1_top2
+        if prior_consensus is not None and prior_consensus.margin_top1_top2 > 0
+        else 0.05
+    )
+
+    support = min(0.94, support + 0.03 + min(0.06, transcript_depth * 0.01))
+    confidence = min(0.94, confidence + 0.02 + min(0.05, transcript_depth * 0.008))
+    disagreement = max(0.18, disagreement - min(0.10, transcript_depth * 0.015))
+    margin = min(0.24, margin + 0.02 + min(0.05, transcript_depth * 0.008))
+
+    if snapshot.candidate_decision:
+        support = min(0.96, support + 0.05)
+        confidence = min(0.96, confidence + 0.04)
+        disagreement = max(0.15, disagreement - 0.05)
+        margin = min(0.28, margin + 0.03)
+    if open_question_count:
+        confidence = max(0.42, confidence - min(0.10, open_question_count * 0.02))
+        disagreement = min(0.90, disagreement + min(0.10, open_question_count * 0.015))
+    if snapshot.last_human_message:
+        support = min(0.96, support + 0.02)
+        confidence = min(0.96, confidence + 0.03)
+        disagreement = max(0.16, disagreement - 0.03)
+
+    return DecisionSignals(
+        support=support,
+        confidence=confidence,
+        risk_penalty=min(0.32, 0.08 + open_question_count * 0.03),
+        margin_top1_top2=margin,
+        disagreement_index=disagreement,
+        rounds_without_progress=1 if snapshot.candidate_decision and round_index > 1 else 0,
+        tool_failure_rate=0.02,
+    )
+
+
+def signals_after_round(
+    *,
+    snapshot: Any,
+    round_index: int,
+    open_questions: list[str],
+    synthesis_output: "SynthesisOutput",
+) -> DecisionSignals:
+    """Updates the per-round signals based on the synthesis output."""
+    signals = signals_for_round(snapshot, round_index)
+    open_question_penalty = min(0.12, len(open_questions) * 0.03)
+    disagreement_adjustment = min(0.16, len(synthesis_output.disagreement) * 0.04)
+    agreement_boost = min(0.12, len(synthesis_output.agreement) * 0.03)
+    action_item_boost = 0.04 if synthesis_output.action_item_draft else 0.0
+
+    candidate_stable = bool(
+        snapshot.candidate_decision
+        and snapshot.candidate_decision.strip() == synthesis_output.decision_candidate.strip()
+    )
+    rounds_without_progress = 1 if candidate_stable and round_index > 1 else 0
+
+    return DecisionSignals(
+        support=min(0.97, signals.support + agreement_boost + action_item_boost),
+        confidence=max(0.30, min(0.97, signals.confidence - open_question_penalty + 0.02)),
+        risk_penalty=min(0.35, signals.risk_penalty + open_question_penalty / 2),
+        margin_top1_top2=min(0.24, signals.margin_top1_top2 + agreement_boost / 2),
+        disagreement_index=max(
+            0.15,
+            min(0.95, signals.disagreement_index + disagreement_adjustment - agreement_boost),
+        ),
+        rounds_without_progress=rounds_without_progress,
+        tool_failure_rate=signals.tool_failure_rate,
+    )
+
+
+def resolve_round_end_signal(
+    *,
+    snapshot: Any,
+    round_index: int,
+    synthesis_output: "SynthesisOutput",
+    consensus: Any,
+) -> tuple[bool, str]:
+    """Decides whether this round should end the meeting and why.
+
+    Three precedence layers, all unchanged from the pre-Phase-2 method:
+    consensus.should_end > synthesis.should_end_meeting > stable
+    follow-up detection across consecutive rounds.
+    """
+    if consensus.should_end:
+        return True, consensus.reason
+    if synthesis_output.should_end_meeting:
+        return True, synthesis_output.conclusion_reason
+    if _is_stable_follow_up_outcome(
+        snapshot=snapshot,
+        round_index=round_index,
+        synthesis_output=synthesis_output,
+    ):
+        return (
+            True,
+            "orchestration detected a stable follow-up outcome across consecutive rounds",
+        )
+    return False, ""
+
+
+def _is_stable_follow_up_outcome(
+    *,
+    snapshot: Any,
+    round_index: int,
+    synthesis_output: "SynthesisOutput",
+) -> bool:
+    if round_index < 2:
+        return False
+    if synthesis_output.conclusion_type != "follow_up_required":
+        return False
+    prior_conclusion_type = str(getattr(snapshot, "conclusion_type", "")).strip().lower()
+    if prior_conclusion_type != "follow_up_required":
+        return False
+    prior_candidate = _normalize_text(getattr(snapshot, "candidate_decision", ""))
+    current_candidate = _normalize_text(synthesis_output.decision_candidate)
+    if not prior_candidate or not current_candidate or prior_candidate != current_candidate:
+        return False
+    return bool(synthesis_output.action_item_draft)
 
 
 def _build_runtime_meeting_brief(snapshot: Any, next_focus: str) -> dict[str, Any]:

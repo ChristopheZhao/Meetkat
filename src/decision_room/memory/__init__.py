@@ -19,6 +19,7 @@ Storage path defaults to ``$MEETKAT_MEMORY_DIR`` or ``~/.meetkat/memory``.
 
 from .helpers import (
     agent_scope,
+    format_memory_recall_section,
     mas_scope,
     memory_recall_for_role,
     persist_meeting_lessons_from_snapshot,
@@ -41,6 +42,7 @@ __all__ = [
     "agent_scope",
     "default_long_term_store",
     "default_room_memory_store",
+    "format_memory_recall_section",
     "mas_scope",
     "memory_recall_for_role",
     "persist_meeting_lessons_from_snapshot",
