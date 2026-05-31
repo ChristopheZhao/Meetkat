@@ -66,9 +66,12 @@ LLM provider config lives in `.env` (see `.env.example`). The default profile as
 - ✅ Real multi-round LLM meetings with role-distinct positions
 - ✅ Decision record export with full audit trail
 - ✅ Demo frontend with real-time agent timeline
-- 🚧 Web-based room creation flow (in-meeting clarification dialogue, not preflight forms)
+- ✅ Specialist ReAct loop with autonomous challenge / refusal under role contracts
+- ✅ Tool registry + MCP adapter wired into the agent loop
+- ✅ Measured convergence signals (claim clustering, support / confidence / disagreement scores)
+- 🚧 Native-agent clarification cutover (removing remaining preflight-form residue in favor of in-meeting dialogue)
 - 🚧 Cross-meeting decision index (`docs/decisions/INDEX.md` auto-generation)
-- 🚧 Tool extension SDK for domain-specific specialists
+- 🚧 Tool extension SDK — contributor-facing docs and examples for third-party tool authors
 
 ## Repository layout
 
