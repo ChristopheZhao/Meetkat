@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -23,14 +22,7 @@ from decision_room.mas.types import (
 )
 from decision_room.policies.fallback import DisasterOnlyFallbackPolicy
 from decision_room.policies.routing_control import RoutingControlPolicy
-from decision_room.providers import (
-    GenerateRequest,
-    ProviderConfig,
-    ProviderHTTPError,
-    ProviderNetworkError,
-    ProviderRegistry,
-    ProviderTimeoutError,
-)
+from decision_room.providers import ProviderConfig, ProviderRegistry
 from decision_room.routing.model_router import HybridModelRouter, RouterTargets
 from decision_room.tools import ToolRegistry, default_tool_registry
 
@@ -147,6 +139,14 @@ class RouteExecution:
 
 
 class LLMRoomExecutor:
+    """Back-compat wrapper around ``RoundOrchestrator(HostLedSpeakerStrategy)``.
+
+    Phase 4 collapsed both topology executors onto a single
+    ``RoundOrchestrator``; this class stays for one release as a stable
+    factory + import target. All round-build behavior comes from the
+    orchestrator now.
+    """
+
     def __init__(
         self,
         registry: ProviderRegistry,
@@ -167,16 +167,16 @@ class LLMRoomExecutor:
         self._consensus = consensus or HybridConsensusStrategy()
         self._use_background_threads = use_background_threads
         self._transient_max_attempts = max(1, transient_max_attempts)
-        # Phase 2: every role runs as a real Agent. The orchestrator owns
-        # the lifecycle but no longer the prompt/parse/retry details.
-        # Phase 3: agents share memory stores so host/specialist/synthesis
-        # recall blocks see the same state.
-        # Importing lazily avoids a module-load cycle through agents/.
-        from decision_room.agents import (
-            HostAgent,
-            SpecialistAgent,
-            SynthesisAgent,
-        )
+        self._tool_registry = tool_registry or default_tool_registry()
+
+        # Build the host agent + orchestrator. Phase 4: the host-led
+        # speaker strategy is the only thing host-led vs supervisor-led
+        # differs by; the rest of the round build lives in
+        # RoundOrchestrator. Importing lazily avoids a module-load cycle
+        # through agents/ and orchestration/.
+        from decision_room.agents import HostAgent
+        from .round_orchestrator import RoundOrchestrator
+        from .speaker_strategies import HostLedSpeakerStrategy
 
         agent_kwargs = dict(
             registry=registry,
@@ -186,13 +186,24 @@ class LLMRoomExecutor:
             room_memory_store=room_memory_store,
             long_term_store=long_term_store,
         )
-        self._tool_registry = tool_registry or default_tool_registry()
         self._host_agent = HostAgent(**agent_kwargs)
-        self._specialist_agent = SpecialistAgent(
+        self._orchestrator = RoundOrchestrator(
+            registry=registry,
+            router=router,
+            strategy=HostLedSpeakerStrategy(self._host_agent),
+            planner=self._planner,
+            coordination=self._coordination,
+            consensus=self._consensus,
+            use_background_threads=use_background_threads,
+            transient_max_attempts=self._transient_max_attempts,
             tool_registry=self._tool_registry,
-            **agent_kwargs,
+            room_memory_store=room_memory_store,
+            long_term_store=long_term_store,
         )
-        self._synthesis_agent = SynthesisAgent(**agent_kwargs)
+        # Expose agent attributes for back-compat with tests/callers that
+        # introspected the executor's internals.
+        self._specialist_agent = self._orchestrator._specialist_agent  # noqa: SLF001
+        self._synthesis_agent = self._orchestrator._synthesis_agent  # noqa: SLF001
 
     @classmethod
     def from_env(cls) -> RoomExecutor:
@@ -237,500 +248,20 @@ class LLMRoomExecutor:
         *,
         publish: Any = None,
     ) -> RoomRound:
-        from decision_room.agents import TurnContext
-
-        phase = phase_for_round(snapshot, round_index)
-        routing_signals = signals_for_round(snapshot, round_index)
-        topic = snapshot.topic or "multi-agent meeting room"
-        ctx = DecisionContext(
-            room_id=snapshot.room_id,
-            phase=phase,
-            signals=routing_signals,
-            metadata={"topic": topic},
+        # Phase 4: the build loop lives in RoundOrchestrator; this method
+        # is a thin back-compat shim. Both topologies share the same loop.
+        return await self._orchestrator.build_round(
+            snapshot, round_index, publish=publish
         )
 
-        plan = self._planner.plan(ctx)
-        next_focus = resolve_focus(snapshot, plan.next_focus)
-        route_ctx = ctx
-        route = self._router.route(route_ctx)
-
-        host_ctx = TurnContext(
-            snapshot=snapshot,
-            round_index=round_index,
-            phase=phase,
-            next_focus=next_focus,
-            route_ctx=route_ctx,
-            route=route,
-            publish=publish,
-        )
-        host_result = await self._host_agent.run(host_ctx)
-        route_ctx = host_result.ctx
-        route = host_result.route
-        host_agenda = host_result.agenda
-
-        specialist_turns = [
-            (specialist, turn.task)
-            for specialist, turn in zip(
-                resolve_turn_specialists(
-                    snapshot,
-                    [turn.role for turn in host_agenda.turns],
-                ),
-                host_agenda.turns,
-            )
-            if specialist.role == turn.role
-        ]
-        if not specialist_turns:
-            raise ValueError("host agenda did not resolve to any valid specialist turns")
-
-        coordination = self._coordination_for_turns(
-            ctx, specialist_turns, snapshot=snapshot
-        )
-
-        host_message = self._build_host_message(
-            snapshot=snapshot,
-            phase=phase,
-            round_index=round_index,
-            next_focus=next_focus,
-            route=route,
-            host_agenda=host_agenda,
-            target_roles=[specialist.role for specialist, _task in specialist_turns],
-        )
-        turn_results: list[SpecialistTurnResult] = []
-        target_claim_ref = ""
-        for specialist, turn_task in specialist_turns:
-            specialist_ctx = TurnContext(
-                snapshot=snapshot,
-                round_index=round_index,
-                phase=phase,
-                next_focus=next_focus,
-                route_ctx=route_ctx,
-                route=route,
-                publish=publish,
-                extras={
-                    "specialist": specialist,
-                    "turn_task": turn_task,
-                    "host_agenda": host_agenda,
-                    "target_claim_ref": target_claim_ref,
-                },
-            )
-            specialist_result = await self._specialist_agent.run(specialist_ctx)
-            route_ctx = specialist_result.ctx
-            route = specialist_result.route
-            output = specialist_result.output
-            turn_results.append(
-                SpecialistTurnResult(
-                    specialist=specialist,
-                    task=turn_task,
-                    output=output,
-                    route=route,
-                )
-            )
-            target_claim_ref = output.claim
-
-        synthesis_ctx = TurnContext(
-            snapshot=snapshot,
-            round_index=round_index,
-            phase=phase,
-            next_focus=next_focus,
-            route_ctx=route_ctx,
-            route=route,
-            publish=publish,
-            extras={"host_agenda": host_agenda, "turn_results": turn_results},
-        )
-        synthesis_result = await self._synthesis_agent.run(synthesis_ctx)
-        route_ctx = synthesis_result.ctx
-        synthesis_route = synthesis_result.route
-        synthesis_output = synthesis_result.output
-
-        open_questions = _dedupe_strings(
-            [
-                *_visible_open_questions(snapshot),
-                *host_agenda.open_questions,
-                *_filter_answered_questions(snapshot, synthesis_output.open_questions),
-            ],
-            limit=6,
-        )
-        post_signals = self._signals_after_round(
-            snapshot=snapshot,
-            round_index=round_index,
-            open_questions=open_questions,
-            synthesis_output=synthesis_output,
-        )
-        consensus = self._consensus.evaluate(
-            DecisionContext(
-                room_id=snapshot.room_id,
-                phase=phase,
-                signals=post_signals,
-                metadata={"topic": topic},
-            )
-        )
-
-        messages = [host_message]
-        for turn_index, turn_result in enumerate(turn_results, start=1):
-            messages.append(
-                RoomMessage(
-                    role=turn_result.specialist.role,
-                    title=turn_result.output.title,
-                    text=turn_result.output.text,
-                    artifacts={
-                        "claim": turn_result.output.claim,
-                        "evidence": turn_result.output.evidence,
-                        "confidence": turn_result.output.confidence,
-                        "target_claim_ref": turn_result.output.target_claim_ref,
-                        "specialist_display_name": turn_result.specialist.display_name,
-                        "capability_profile": turn_result.specialist.capability_profile,
-                        "turn_task": turn_result.task,
-                        "turn_index": turn_index,
-                        "route": _route_artifact(turn_result.route),
-                    },
-                )
-            )
-        synthesis_message = RoomMessage(
-            role="synthesis",
-            title=synthesis_output.title,
-            text=synthesis_output.text,
-            artifacts={
-                "agreement": synthesis_output.agreement,
-                "disagreement": synthesis_output.disagreement,
-                "open_questions": open_questions,
-                "decision_candidate": synthesis_output.decision_candidate,
-                "action_item_draft": synthesis_output.action_item_draft,
-                "conclusion_type": synthesis_output.conclusion_type,
-                "conclusion_reason": synthesis_output.conclusion_reason,
-                "recommended_next_phase": synthesis_output.recommended_next_phase,
-                "recommended_next_action": synthesis_output.recommended_next_action,
-                "route": _route_artifact(synthesis_route),
-            },
-        )
-        summary_text = (
-            f"{synthesis_output.text} Conclusion: {synthesis_output.conclusion_type}. "
-            f"{synthesis_output.conclusion_reason} Consensus score {consensus.score:.2f}. "
-            f"{consensus.reason}."
-        )
-        should_end, end_reason = self._resolve_round_end_signal(
-            snapshot=snapshot,
-            round_index=round_index,
-            synthesis_output=synthesis_output,
-            consensus=consensus,
-        )
-
-        return RoomRound(
-            phase=phase,
-            signals=post_signals,
-            plan_topic=plan.topic,
-            next_focus=next_focus,
-            coordination=coordination,
-            consensus_score=consensus.score,
-            consensus_should_end=consensus.should_end,
-            should_end=should_end,
-            consensus_reason=consensus.reason,
-            end_reason=end_reason,
-            messages=messages,
-            decision_candidate=synthesis_output.decision_candidate,
-            action_items=synthesis_output.action_item_draft,
-            open_questions=open_questions,
-            summary_text=summary_text,
-            conclusion_type=synthesis_output.conclusion_type,
-            conclusion_reason=synthesis_output.conclusion_reason,
-            synthesis_message=synthesis_message,
-        )
-
-    async def _generate_argument(
-        self,
-        *,
-        route_ctx: DecisionContext,
-        route: RoutingDecision,
-        specialist: CandidateSpecialist,
-        turn_task: str,
-        snapshot: Any,
-        phase: MeetingPhase,
-        round_index: int,
-        next_focus: str,
-        host_agenda: Any,
-        target_claim_ref: str,
-        memory_recall: dict[str, Any] | None = None,
-    ) -> tuple[ArgumentOutput, DecisionContext, RoutingDecision]:
-        system_prompt, user_prompt = _build_argument_prompts(
-            specialist=specialist,
-            turn_task=turn_task,
-            snapshot=snapshot,
-            phase=phase,
-            round_index=round_index,
-            next_focus=next_focus,
-            host_agenda=host_agenda,
-            target_claim_ref=target_claim_ref,
-            route=route,
-            memory_recall=memory_recall,
-        )
-        execution = await self._generate_text(
-            route_ctx=route_ctx,
-            route=route,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            role=specialist.role,
-        )
-        return (
-            _parse_argument_output(
-                execution.text,
-                role=specialist.role,
-            ),
-            execution.ctx,
-            execution.route,
-        )
-
-    async def _generate_synthesis(
-        self,
-        *,
-        route_ctx: DecisionContext,
-        route: RoutingDecision,
-        snapshot: Any,
-        phase: MeetingPhase,
-        round_index: int,
-        next_focus: str,
-        host_agenda: Any,
-        turn_results: list[SpecialistTurnResult],
-    ) -> tuple[SynthesisOutput, DecisionContext, RoutingDecision]:
-        system_prompt, user_prompt = _build_synthesis_prompts(
-            snapshot=snapshot,
-            phase=phase,
-            round_index=round_index,
-            next_focus=next_focus,
-            host_agenda=host_agenda,
-            turn_results=turn_results,
-            route=route,
-        )
-        execution = await self._generate_text(
-            route_ctx=route_ctx,
-            route=route,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            role="synthesis",
-        )
-        return _parse_synthesis_output(execution.text), execution.ctx, execution.route
-
-    async def _generate_text(
-        self,
-        *,
-        route_ctx: DecisionContext,
-        route: RoutingDecision,
-        system_prompt: str,
-        user_prompt: str,
-        role: str,
-    ) -> RouteExecution:
-        request = GenerateRequest(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            model=route.target.model,
-            temperature=0.2,
-        )
-        try:
-            text = await self._generate_with_same_route_retries(route, request)
-            return RouteExecution(text=text, route=route, ctx=route_ctx)
-        except (ProviderTimeoutError, ProviderNetworkError, ProviderHTTPError) as exc:
-            fallback_ctx = self._ctx_after_provider_failure(route_ctx, exc)
-            fallback_route = self._router.route(fallback_ctx)
-            if fallback_route.target == route.target:
-                raise RuntimeError(
-                    "room executor model request failed: "
-                    f"role={role}; "
-                    f"supplier={route.target.supplier}; "
-                    f"model={route.target.model}; "
-                    f"attempts={self._transient_max_attempts}; "
-                    f"reason={exc}"
-                ) from exc
-
-            fallback_request = GenerateRequest(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                model=fallback_route.target.model,
-                temperature=0.2,
-            )
-            try:
-                text = await self._generate_with_same_route_retries(
-                    fallback_route,
-                    fallback_request,
-                )
-                return RouteExecution(text=text, route=fallback_route, ctx=fallback_ctx)
-            except Exception as fallback_exc:
-                raise RuntimeError(
-                    "room executor model request failed after control reroute: "
-                    f"role={role}; "
-                    f"primary={route.target.supplier}/{route.target.model}; "
-                    f"rerouted={fallback_route.target.supplier}/{fallback_route.target.model}; "
-                    f"primary_reason={exc}; "
-                    f"reroute_reason={fallback_exc}"
-                ) from fallback_exc
-        except Exception as exc:
-            raise RuntimeError(
-                "room executor model request failed: "
-                f"role={role}; "
-                f"supplier={route.target.supplier}; "
-                f"model={route.target.model}; "
-                f"reason={exc}"
-            ) from exc
-
-    async def _generate_with_same_route_retries(
-        self,
-        route: RoutingDecision,
-        request: GenerateRequest,
-    ) -> str:
-        provider = self._registry.get(route.target.supplier)
-        last_exc: Exception | None = None
-        for attempt in range(1, self._transient_max_attempts + 1):
-            try:
-                if self._use_background_threads:
-                    response = await asyncio.to_thread(provider.generate, request)
-                else:
-                    response = provider.generate(request)
-                return response.text
-            except (ProviderTimeoutError, ProviderNetworkError, ProviderHTTPError) as exc:
-                last_exc = exc
-                if attempt >= self._transient_max_attempts:
-                    break
-                await asyncio.sleep(0.35 * attempt)
-
-        assert last_exc is not None
-        raise last_exc
-
-    def _ctx_after_provider_failure(
-        self,
-        ctx: DecisionContext,
-        exc: Exception,
-    ) -> DecisionContext:
-        signals = ctx.signals
-        next_signals = DecisionSignals(
-            support=signals.support,
-            confidence=signals.confidence,
-            risk_penalty=signals.risk_penalty,
-            margin_top1_top2=signals.margin_top1_top2,
-            disagreement_index=signals.disagreement_index,
-            rounds_without_progress=signals.rounds_without_progress,
-            tool_failure_rate=signals.tool_failure_rate,
-            api_unreachable=signals.api_unreachable,
-            timeout_count=signals.timeout_count,
-            rate_limited_count=signals.rate_limited_count,
-            missing_required_fields_after_retry=signals.missing_required_fields_after_retry,
-            human_force_complete=signals.human_force_complete,
-        )
-        if isinstance(exc, ProviderTimeoutError):
-            next_signals.timeout_count = max(
-                next_signals.timeout_count,
-                self._transient_max_attempts,
-            )
-        elif isinstance(exc, ProviderNetworkError):
-            next_signals.api_unreachable = True
-        elif isinstance(exc, ProviderHTTPError):
-            if exc.status_code == 429:
-                next_signals.rate_limited_count = max(
-                    next_signals.rate_limited_count,
-                    self._transient_max_attempts,
-                )
-            elif exc.status_code is not None and exc.status_code >= 500:
-                next_signals.api_unreachable = True
-
-        return DecisionContext(
-            room_id=ctx.room_id,
-            phase=ctx.phase,
-            signals=next_signals,
-            metadata=dict(ctx.metadata),
-        )
-
-    def _build_host_message(
-        self,
-        *,
-        snapshot: Any,
-        phase: MeetingPhase,
-        round_index: int,
-        next_focus: str,
-        route: RoutingDecision,
-        host_agenda: Any,
-        target_roles: list[str],
-    ) -> RoomMessage:
-        focus_lines = [
-            f"{idx}. {point.title}: {point.reason}"
-            for idx, point in enumerate(host_agenda.focus_points, start=1)
-        ]
-        text = (
-            f"Round {round_index} enters {phase.value}. "
-            f"Meeting focus: {next_focus}\n"
-            + "\n".join(focus_lines)
-        )
-        if snapshot.last_human_message:
-            text += f"\nHuman input to incorporate: {snapshot.last_human_message}"
-        if host_agenda.open_questions:
-            text += "\nOpen questions: " + "; ".join(host_agenda.open_questions)
-        return RoomMessage(
-            role="host",
-            title="Round focus",
-            text=text,
-            artifacts={
-                "next_focus": next_focus,
-                "round_goal": snapshot.goal,
-                "target_roles": target_roles,
-                "focus_points": [
-                    {
-                        "title": point.title,
-                        "reason": point.reason,
-                        "constraint_ids": point.constraint_ids,
-                    }
-                    for point in host_agenda.focus_points
-                ],
-                "turns": [
-                    {
-                        "role": turn.role,
-                        "task": turn.task,
-                    }
-                    for turn in host_agenda.turns
-                ],
-                "open_questions": host_agenda.open_questions,
-                "route": _route_artifact(route),
-            },
-        )
-
-    def _coordination_for_turns(
-        self,
-        ctx: DecisionContext,
-        specialist_turns: list[tuple[CandidateSpecialist, str]],
-        *,
-        snapshot: Any | None = None,
-    ) -> CoordinationAction:
-        # LLM-recommended action wins: if the prior synthesis turn emitted a
-        # ``recommended_next_action``, honor it instead of running the FSM.
-        recommended = (
-            str(getattr(snapshot, "recommended_next_action", "") or "")
-            .strip()
-            .lower()
-            .replace("-", "_")
-        )
-        if recommended:
-            recommended_action_type = _RECOMMENDED_ACTION_TO_TYPE.get(recommended)
-            if recommended_action_type is not None:
-                target_role = (
-                    specialist_turns[0][0].role
-                    if specialist_turns
-                    and recommended_action_type in {ActionType.HANDOFF, ActionType.SPEAK}
-                    else None
-                )
-                return CoordinationAction(
-                    action_type=recommended_action_type,
-                    reason=f"LLM synthesis recommended next action: {recommended}",
-                    target_role=target_role,
-                )
-        coordination = self._coordination.next_action(ctx)
-        if coordination.action_type not in {ActionType.HANDOFF, ActionType.SPEAK}:
-            return coordination
-        if not specialist_turns:
-            return CoordinationAction(
-                action_type=coordination.action_type,
-                reason=coordination.reason,
-            )
-        target_role = specialist_turns[0][0].role
-        return CoordinationAction(
-            action_type=coordination.action_type,
-            reason=coordination.reason,
-            target_role=target_role,
-            payload=dict(coordination.payload),
-        )
+    # Phase 4: the per-role prompt/parse/retry methods on this class
+    # (``_generate_argument``, ``_generate_synthesis``, ``_generate_text``,
+    # ``_generate_with_same_route_retries``, ``_ctx_after_provider_failure``)
+    # all died here. They live in ``decision_room.agents.BaseLLMAgent`` and
+    # the per-role agent classes. Same story for ``_build_host_message``
+    # (now ``speaker_strategies._build_host_message``) and
+    # ``_coordination_for_turns`` (now
+    # ``RoundOrchestrator._coordination_for_assignments``).
 
     def _resolve_focus(self, snapshot: Any, default_focus: str) -> str:
         return resolve_focus(snapshot, default_focus)
