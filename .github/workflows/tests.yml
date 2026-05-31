@@ -1,0 +1,76 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Avoid wasting minutes on superseded pushes to the same PR / branch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: backend (Python 3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync
+
+      - name: Backend unittest suite
+        run: uv run python -m unittest discover -s tests
+
+      - name: Decisions INDEX freshness
+        # The committed docs/decisions/INDEX.md must match what the generator
+        # would produce now. If a new decision record was added without
+        # regenerating, this step fails the PR.
+        run: uv run python scripts/generate_decisions_index.py --check
+
+      - name: Preflight cutover regression guard
+        # PLAN-012 post-condition (merge 167f03c): these symbols were the
+        # core of the clarification-gate residue. They must not come back
+        # in live source — append-only history under docs/plans/ is exempt.
+        run: |
+          set -e
+          if grep -RnE "require_preflight_ready|RoomPreflightError" src tests frontend/src; then
+            echo "::error::preflight-cutover regression — dead clarification-gate symbols reappeared in live code"
+            exit 1
+          fi
+          echo "preflight cutover holds"
+
+  frontend:
+    name: frontend (Node 20)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Contract tests
+        run: npm run test:contracts
+
+      - name: Production build (tsc + vite)
+        run: npm run build

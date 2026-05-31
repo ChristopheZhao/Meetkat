@@ -1,5 +1,9 @@
 # Meetkat
 
+[![tests](https://github.com/ChristopheZhao/Meetkat/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/ChristopheZhao/Meetkat/actions/workflows/tests.yml)
+[![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.12%2B-blue)](pyproject.toml)
+
 > A native-agent decision room: autonomous specialists, hub-and-spoke supervision, persistent memory, exportable records.
 
 Meetkat is a multi-agent runtime where a group of specialist agents debate a real decision in a virtual room. A supervisor agent conducts the order of speaking, but never the content — each specialist plans, retrieves context from memory, and decides what to say on its own. The room exports an auditable Markdown decision record when consensus is reached.
